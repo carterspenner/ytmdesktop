@@ -93,17 +93,18 @@ jobs:
         env:
           YTMD_UPDATE_FEED_OWNER: ${{ vars.YTMD_UPDATE_FEED_OWNER }}
           YTMD_UPDATE_FEED_REPOSITORY: ${{ vars.YTMD_UPDATE_FEED_REPOSITORY }}
+          DEBUG: "electron-packager,electron-forge:*"
         run: node .yarn/releases/yarn-*.cjs package --arch ${{ matrix.arch.node }} --platform linux
 
       - name: Stage packaged app for makepkg
         run: |
           echo "--- pwd ---"
           pwd
-          echo "--- workspace root contents ---"
-          ls -la
+          echo "--- workspace contents (2 levels) ---"
+          find . -maxdepth 2 -not -path "./node_modules*" -not -path "./.git*"
           echo "--- searching for packaged app directory ---"
-          find / -maxdepth 6 -iname "*-linux-*" -type d 2>/dev/null || true
-          PACKAGE_DIR=$(find / -maxdepth 6 -iname "*-linux-*" -type d 2>/dev/null | head -n 1)
+          find "$(pwd)" -maxdepth 3 -not -path "*/node_modules/*" -iname "*-linux-*" -type d 2>/dev/null || true
+          PACKAGE_DIR=$(find "$(pwd)" -maxdepth 3 -not -path "*/node_modules/*" -iname "*-linux-*" -type d 2>/dev/null | head -n 1)
           echo "Using package dir: $PACKAGE_DIR"
           mkdir -p out
           mv "$PACKAGE_DIR" out/app
