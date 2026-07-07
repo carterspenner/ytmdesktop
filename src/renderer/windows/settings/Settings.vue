@@ -211,6 +211,7 @@ async function restartDiscordPresence() {
 }
 
 async function retryAdBlocker() {
+  requiresRestart.value = true;
   adBlockEnabled.value = false;
   await settingsChanged();
   adBlockEnabled.value = true;
@@ -422,9 +423,10 @@ window.ytmd.handleUpdateDownloaded(() => {
           <YTMDSetting
             v-model="adBlockEnabled"
             type="checkbox"
+            restart-required
             name="Ad blocking (uBlock Origin)"
             description="Downloads and loads the uBlock Origin browser extension into the YouTube Music view. This is an unofficial, third-party extension not affiliated with YTMD; ad blocking may violate YouTube's Terms of Service."
-            @change="settingsChanged"
+            @change="settingChangedRequiresRestart"
           />
           <div v-if="adBlockEnabled && adBlockerLoadFailed" class="setting indented">
             <p class="discord-failure">Could not download or load uBlock Origin. Check your internet connection.</p>

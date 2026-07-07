@@ -78,6 +78,12 @@ jobs:
       - name: Github checkout
         uses: actions/checkout@v4
 
+      # The checkout is owned by a different UID than the container runs as, which git's
+      # safe.directory check (CVE-2022-24765 mitigation) rejects; viteconfig/main.ts shells
+      # out to `git rev-parse` during the build, so this must be set before packaging.
+      - name: Mark repository as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       # Arch's nodejs package doesn't reliably provide a bare `yarn` shim the way corepack
       # does on other distros, so the repo's vendored Yarn release is invoked directly.
       - name: Install dependencies

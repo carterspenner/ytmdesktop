@@ -34,15 +34,15 @@ export default class AdBlocker implements IIntegration {
       }
       const extensionPath = await this.preparePromise;
 
-      const wasAlreadyNavigated = this.ytmView.webContents.getURL().length > 0;
+      // Deliberately not reloading ytmView here: reload() is subject to YTM's own
+      // beforeunload handler (active during playback), which pops the disruptive
+      // "YouTube Music is preventing navigation" dialog. The extension only takes
+      // effect on the next navigation, so this setting is flagged restart-required
+      // in Settings.vue instead.
       const extension = await this.ytmView.webContents.session.extensions.loadExtension(extensionPath);
       this.loadedExtensionId = extension.id;
       this.memoryStore?.set("adBlockerLoadFailed", false);
       log.info(`Ad blocker: loaded uBlock Origin (${extension.version})`);
-
-      if (wasAlreadyNavigated) {
-        this.ytmView.webContents.reload();
-      }
     } catch (error) {
       log.error("Ad blocker: failed to load uBlock Origin", error);
       this.memoryStore?.set("adBlockerLoadFailed", true);
@@ -63,10 +63,6 @@ export default class AdBlocker implements IIntegration {
 
     this.loadedExtensionId = null;
     this.memoryStore?.set("adBlockerLoadFailed", false);
-
-    if (this.ytmView.webContents.getURL().length > 0) {
-      this.ytmView.webContents.reload();
-    }
   }
 
   public getYTMScripts(): { name: string; script: string }[] {
