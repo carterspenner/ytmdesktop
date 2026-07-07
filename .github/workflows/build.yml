@@ -53,3 +53,58 @@ jobs:
             out/make/deb/${{ matrix.arch }}/*.deb
             out/make/rpm/${{ matrix.arch }}/*.rpm
             out/make/zip/darwin/${{ matrix.arch }}/*.zip
+
+  build-arch:
+    # There is no maintained Electron Forge maker for pacman packages, so this job packages
+    # the app with `electron-forge package` (skipping the deb/rpm/squirrel/zip makers) and
+    # builds a .pkg.tar.zst itself with makepkg inside an Arch Linux container, using
+    # packaging/arch/PKGBUILD.
+    strategy:
+      matrix:
+        arch: [
+            { node: 'x64',   pacman: 'x86_64' },
+            { node: 'arm64', pacman: 'aarch64' }
+          ]
+      fail-fast: false
+
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git nodejs npm
+
+      - name: Github checkout
+        uses: actions/checkout@v4
+
+      # Arch's nodejs package doesn't reliably provide a bare `yarn` shim the way corepack
+      # does on other distros, so the repo's vendored Yarn release is invoked directly.
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-*.cjs install --immutable
+
+      - name: Package (${{ matrix.arch.node }})
+        env:
+          YTMD_UPDATE_FEED_OWNER: ${{ vars.YTMD_UPDATE_FEED_OWNER }}
+          YTMD_UPDATE_FEED_REPOSITORY: ${{ vars.YTMD_UPDATE_FEED_REPOSITORY }}
+        run: node .yarn/releases/yarn-*.cjs package --arch ${{ matrix.arch.node }} --platform linux
+
+      - name: Stage packaged app for makepkg
+        run: |
+          mv "out/YouTube Music Desktop App-linux-${{ matrix.arch.node }}" out/app
+          tar -C out -czf packaging/arch/app.tar.gz app
+          cp src/assets/icons/ytmd.png packaging/arch/youtube-music-desktop-app.png
+
+      - name: Build Arch package
+        working-directory: packaging/arch
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          YTMD_PKGVER=$(node -p "require('../../package.json').version")
+          su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm"
+
+      - name: Upload artifacts (${{ matrix.arch.node }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-archlinux-${{ matrix.arch.node }}
+          path: packaging/arch/*.pkg.tar.zst
