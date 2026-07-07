@@ -97,11 +97,15 @@ jobs:
 
       - name: Stage packaged app for makepkg
         run: |
-          echo "--- out/ contents ---"
-          ls -la out/
-          find out -maxdepth 2 -print
-          PACKAGE_DIR=$(find out -maxdepth 1 -mindepth 1 -type d | head -n 1)
+          echo "--- pwd ---"
+          pwd
+          echo "--- workspace root contents ---"
+          ls -la
+          echo "--- searching for packaged app directory ---"
+          find / -maxdepth 6 -iname "*-linux-*" -type d 2>/dev/null || true
+          PACKAGE_DIR=$(find / -maxdepth 6 -iname "*-linux-*" -type d 2>/dev/null | head -n 1)
           echo "Using package dir: $PACKAGE_DIR"
+          mkdir -p out
           mv "$PACKAGE_DIR" out/app
           tar -C out -czf packaging/arch/app.tar.gz app
           cp src/assets/icons/ytmd.png packaging/arch/youtube-music-desktop-app.png
