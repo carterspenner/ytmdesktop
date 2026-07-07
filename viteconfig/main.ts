@@ -1,5 +1,29 @@
 import { execSync } from "node:child_process";
-import { defineConfig } from "vite";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { defineConfig, type Plugin } from "vite";
+
+// electron-chrome-extensions resolves its preload script at runtime via `import.meta.dirname`,
+// which Rollup doesn't polyfill when bundling the package's ESM source into this CJS
+// main-process bundle, leaving it undefined and crashing the app on startup. Electron Forge's
+// Vite plugin also only packages the `.vite` output folder, so `node_modules` isn't available
+// for the library's require.resolve fallback either. Copying the preload script next to our own
+// bundled output lets ad-blocker/index.ts route around both problems by passing an explicit
+// `modulePath` pointing at __dirname.
+function copyChromeExtensionsPreload(): Plugin {
+  const require = createRequire(__filename);
+  const source = require.resolve("electron-chrome-extensions/preload");
+  return {
+    name: "copy-chrome-extensions-preload",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "dist/chrome-extension-api.preload.js",
+        source: readFileSync(source)
+      });
+    }
+  };
+}
 
 let gitBranch: string = "";
 try {
@@ -29,6 +53,7 @@ export default defineConfig({
       external: ["bufferutil", "utf-8-validate"]
     }
   },
+  plugins: [copyChromeExtensionsPreload()],
   define: {
     YTMD_DISABLE_UPDATES: devBuild,
     YTMD_UPDATE_FEED_OWNER: process.env.YTMD_UPDATE_FEED_OWNER ? `'${process.env.YTMD_UPDATE_FEED_OWNER}'` : "'ytmdesktop'",

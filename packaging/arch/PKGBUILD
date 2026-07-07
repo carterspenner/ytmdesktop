@@ -1,0 +1,38 @@
+# Maintainer: YTMDesktop Contributors
+#
+# This PKGBUILD repackages the already-built Electron Forge Linux output (the same
+# "out/<name>-linux-<arch>" tree that the project's .deb/.rpm makers consume) into a
+# pacman package. It is not meant to be run standalone with `makepkg -s`: the CI job in
+# .github/workflows/build.yml stages app.tar.gz and youtube-music-desktop-app.png next to
+# this file before invoking makepkg, and sets YTMD_PKGVER/YTMD_PKGARCH.
+#
+# To build locally: run `yarn package --arch x64 --platform linux` from the repo root,
+# then from the "out" directory:
+#   mv "YouTube Music Desktop App-linux-x64" app && tar -czf packaging/arch/app.tar.gz app
+#   cp ../src/assets/icons/ytmd.png packaging/arch/youtube-music-desktop-app.png
+#   cd packaging/arch && YTMD_PKGVER=2.0.11 YTMD_PKGARCH=x86_64 makepkg -f
+
+pkgname=youtube-music-desktop-app
+pkgver=${YTMD_PKGVER:-0.0.0}
+pkgrel=1
+pkgdesc="A Desktop App for YouTube Music"
+arch=("${YTMD_PKGARCH:-x86_64}")
+url="https://github.com/ytmdesktop/ytmdesktop"
+license=('GPL-3.0-only')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libxtst' 'at-spi2-core' 'libdrm' 'mesa' 'libnotify' 'xdg-utils')
+optdepends=('libappindicator-gtk3: tray icon support')
+options=('!strip' '!emptydirs')
+source=("app.tar.gz" "$pkgname.png" "$pkgname.desktop")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -dm755 "$pkgdir/usr/lib/$pkgname"
+  cp -a "$srcdir/app/." "$pkgdir/usr/lib/$pkgname/"
+  chmod -R go-w "$pkgdir/usr/lib/$pkgname"
+
+  install -dm755 "$pkgdir/usr/bin"
+  ln -s "/usr/lib/$pkgname/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+  install -Dm644 "$srcdir/$pkgname.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/$pkgname.png"
+  install -Dm644 "$srcdir/$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
+}

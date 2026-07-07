@@ -53,3 +53,87 @@ jobs:
             out/make/deb/${{ matrix.arch }}/*.deb
             out/make/rpm/${{ matrix.arch }}/*.rpm
             out/make/zip/darwin/${{ matrix.arch }}/*.zip
+
+  build-arch:
+    # There is no maintained Electron Forge maker for pacman packages, so this job packages
+    # the app with `electron-forge package` (skipping the deb/rpm/squirrel/zip makers) and
+    # builds a .pkg.tar.zst itself with makepkg inside an Arch Linux container, using
+    # packaging/arch/PKGBUILD.
+    strategy:
+      matrix:
+        arch: [
+            { node: 'x64',   pacman: 'x86_64' },
+            { node: 'arm64', pacman: 'aarch64' }
+          ]
+      fail-fast: false
+
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      # Arch's own nodejs package tracks current (Node 26 at the time of writing), which the
+      # Vite plugin's packaging process-exit handling doesn't seem to like - it was exiting
+      # 0 mid-way through extracting the Electron zip, before out/ ever got written. Pinning
+      # the same Node version the other build jobs use avoids that entirely.
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git
+
+      - name: Github checkout
+        uses: actions/checkout@v4
+
+      # The checkout is owned by a different UID than the container runs as, which git's
+      # safe.directory check (CVE-2022-24765 mitigation) rejects; viteconfig/main.ts shells
+      # out to `git rev-parse` during the build, so this must be set before packaging.
+      - name: Mark repository as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Setup Node (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.9.0"
+
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-*.cjs install --immutable
+
+      - name: Package (${{ matrix.arch.node }})
+        env:
+          YTMD_UPDATE_FEED_OWNER: ${{ vars.YTMD_UPDATE_FEED_OWNER }}
+          YTMD_UPDATE_FEED_REPOSITORY: ${{ vars.YTMD_UPDATE_FEED_REPOSITORY }}
+          DEBUG: "electron-packager,electron-forge:*"
+        run: node .yarn/releases/yarn-*.cjs package --arch ${{ matrix.arch.node }} --platform linux
+
+      - name: Stage packaged app for makepkg
+        run: |
+          echo "--- pwd ---"
+          pwd
+          echo "--- workspace contents (2 levels) ---"
+          find . -maxdepth 2 -not -path "./node_modules*" -not -path "./.git*"
+          echo "--- searching for packaged app directory ---"
+          find "$(pwd)" -maxdepth 3 -not -path "*/node_modules/*" -iname "*-linux-*" -type d 2>/dev/null || true
+          PACKAGE_DIR=$(find "$(pwd)" -maxdepth 3 -not -path "*/node_modules/*" -iname "*-linux-*" -type d 2>/dev/null | head -n 1)
+          echo "Using package dir: $PACKAGE_DIR"
+          mkdir -p out
+          mv "$PACKAGE_DIR" out/app
+          tar -C out -czf packaging/arch/app.tar.gz app
+          cp src/assets/icons/ytmd.png packaging/arch/youtube-music-desktop-app.png
+
+      - name: Build Arch package
+        working-directory: packaging/arch
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          YTMD_PKGVER=$(node -p "require('../../package.json').version")
+          # --nodeps: this only assembles the archive from already-built binaries, it doesn't
+          # compile anything, so the runtime libraries in depends=() don't need to be installed
+          # on the machine doing the packaging.
+          # --ignorearch: the aarch64 job still runs on an x86_64 GitHub-hosted runner (there's
+          # no arm64 runner here) - it's cross-packaging prebuilt binaries, not compiling, so
+          # makepkg's own-machine-architecture check is a false positive here.
+          su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm --nodeps --ignorearch"
+
+      - name: Upload artifacts (${{ matrix.arch.node }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-archlinux-${{ matrix.arch.node }}
+          path: packaging/arch/*.pkg.tar.zst

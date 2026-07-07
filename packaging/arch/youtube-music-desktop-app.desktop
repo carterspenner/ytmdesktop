@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=YouTube Music Desktop App
+Comment=YouTube Music Desktop App
+Exec=youtube-music-desktop-app %U
+Icon=youtube-music-desktop-app
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;
+MimeType=x-scheme-handler/ytmd;
+StartupWMClass=YouTube Music Desktop App
