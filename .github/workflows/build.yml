@@ -127,7 +127,10 @@ jobs:
           # --nodeps: this only assembles the archive from already-built binaries, it doesn't
           # compile anything, so the runtime libraries in depends=() don't need to be installed
           # on the machine doing the packaging.
-          su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm --nodeps"
+          # --ignorearch: the aarch64 job still runs on an x86_64 GitHub-hosted runner (there's
+          # no arm64 runner here) - it's cross-packaging prebuilt binaries, not compiling, so
+          # makepkg's own-machine-architecture check is a false positive here.
+          su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm --nodeps --ignorearch"
 
       - name: Upload artifacts (${{ matrix.arch.node }})
         uses: actions/upload-artifact@v4
