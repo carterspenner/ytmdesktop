@@ -1,5 +1,6 @@
-import { app, BrowserView, WebContents, webContents } from "electron";
+import { app, BrowserView, BrowserWindow, WebContents, webContents } from "electron";
 import log from "electron-log";
+import { ElectronChromeExtensions } from "electron-chrome-extensions";
 
 import IIntegration from "../integration";
 import MemoryStore from "../../memory-store";
@@ -8,15 +9,18 @@ import { ensureUBlockOriginExtension } from "./extension-provisioner";
 
 export default class AdBlocker implements IIntegration {
   private ytmView: BrowserView | null = null;
+  private mainWindow: BrowserWindow | null = null;
   private memoryStore: MemoryStore<MemoryStoreSchema> | null = null;
   private isEnabled = false;
   private loadedExtensionId: string | null = null;
   private preparePromise: Promise<string> | null = null;
   private backgroundPageWatcherAttached = false;
+  private chromeExtensions: ElectronChromeExtensions | null = null;
 
-  public provide(memoryStore: MemoryStore<MemoryStoreSchema>, ytmView: BrowserView): void {
+  public provide(memoryStore: MemoryStore<MemoryStoreSchema>, ytmView: BrowserView, mainWindow: BrowserWindow): void {
     this.memoryStore = memoryStore;
     this.ytmView = ytmView;
+    this.mainWindow = mainWindow;
 
     // The extension is loaded onto the ytmView's persistent session rather than the BrowserView
     // itself, so it stays loaded across ytmView recreation and doesn't need to be reloaded here.
@@ -35,6 +39,11 @@ export default class AdBlocker implements IIntegration {
       }
       const extensionPath = await this.preparePromise;
 
+      // Electron only natively implements a subset of the extension APIs uBlock Origin needs
+      // (e.g. chrome.browserAction is entirely missing, which crashes its background page on
+      // startup before any filtering logic runs). electron-chrome-extensions fills in that gap.
+      this.ensureChromeExtensionsSupport();
+
       // Deliberately not reloading ytmView here: reload() is subject to YTM's own
       // beforeunload handler (active during playback), which pops the disruptive
       // "YouTube Music is preventing navigation" dialog. The extension only takes
@@ -50,6 +59,19 @@ export default class AdBlocker implements IIntegration {
       this.memoryStore?.set("adBlockerLoadFailed", true);
     } finally {
       this.preparePromise = null;
+    }
+  }
+
+  private ensureChromeExtensionsSupport(): void {
+    if (this.chromeExtensions || !this.ytmView) return;
+
+    this.chromeExtensions = new ElectronChromeExtensions({
+      session: this.ytmView.webContents.session,
+      license: "GPL-3.0"
+    });
+
+    if (this.mainWindow) {
+      this.chromeExtensions.addTab(this.ytmView.webContents, this.mainWindow);
     }
   }
 

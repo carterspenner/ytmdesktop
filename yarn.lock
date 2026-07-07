@@ -3725,6 +3725,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"electron-chrome-extensions@npm:4.9.0":
+  version: 4.9.0
+  resolution: "electron-chrome-extensions@npm:4.9.0"
+  dependencies:
+    debug: "npm:^4.3.1"
+  checksum: 10c0/5412d587002415e9a52ed9a9af118740bb690aef82e556560a535ebf5eca4dfbe291f3acf969dc19c2fad38dd1d38b67ee36afbe9d47d143e8624d2c4f0a7d02
+  languageName: node
+  linkType: hard
+
 "electron-installer-common@npm:^0.10.2":
   version: 0.10.3
   resolution: "electron-installer-common@npm:0.10.3"
@@ -9935,6 +9944,7 @@ __metadata:
     "@vitejs/plugin-vue": "npm:^5.2.4"
     conf: "npm:^10.2.0"
     electron: "npm:^40.4.0"
+    electron-chrome-extensions: "npm:4.9.0"
     electron-log: "npm:5.4.3"
     electron-squirrel-startup: "npm:^1.0.1"
     eslint: "npm:^8.57.1"

@@ -535,7 +535,7 @@ store.onDidAnyChange(async (newState, oldState) => {
   }
 
   if (newState.integrations.adBlockEnabled) {
-    adBlocker.provide(memoryStore, ytmView);
+    adBlocker.provide(memoryStore, ytmView, mainWindow);
   }
   if (newState.integrations.adBlockEnabled && !oldState.integrations.adBlockEnabled) {
     await adBlocker.enable();
@@ -1194,7 +1194,7 @@ const createYTMView = async (): Promise<void> => {
 
   if (store.get("integrations.adBlockEnabled")) {
     memoryStore.set("ytmViewLoadingStatus", "Preparing content blocker...");
-    adBlocker.provide(memoryStore, ytmView);
+    adBlocker.provide(memoryStore, ytmView, mainWindow);
     await adBlocker.enable();
   }
 
