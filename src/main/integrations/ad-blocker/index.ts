@@ -67,7 +67,11 @@ export default class AdBlocker implements IIntegration {
 
     this.chromeExtensions = new ElectronChromeExtensions({
       session: this.ytmView.webContents.session,
-      license: "GPL-3.0"
+      license: "GPL-3.0",
+      // electron-chrome-extensions can't locate its own preload script automatically in our
+      // bundled + asar-packaged build (see viteconfig/main.ts for why), so this points it at the
+      // copy we place next to this file's own compiled output at build time.
+      modulePath: __dirname
     });
 
     if (this.mainWindow) {
