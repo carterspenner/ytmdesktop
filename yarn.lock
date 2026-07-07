@@ -9942,6 +9942,7 @@ __metadata:
     eslint-import-resolver-typescript: "npm:^3.10.1"
     eslint-plugin-import: "npm:^2.32.0"
     eslint-plugin-vue: "npm:^9.33.0"
+    extract-zip: "npm:^2.0.1"
     fastify: "npm:^5.7.4"
     fastify-socket.io: "npm:^5.1.0"
     husky: "npm:^9.1.7"

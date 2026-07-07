@@ -28,6 +28,7 @@ import MemoryStore from "./memory-store";
 import playerStateStore, { PlayerState, VideoState } from "./player-state-store";
 import { MemoryStoreSchema, StoreSchema, TrayIconStyle } from "../shared/store/schema";
 
+import AdBlocker from "./integrations/ad-blocker";
 import CompanionServer from "./integrations/companion-server";
 import CustomCSS from "./integrations/custom-css";
 import DiscordPresence from "./integrations/discord-presence";
@@ -161,6 +162,7 @@ const template: MenuItemConstructorOptions[] = [{ role: "appMenu", label: "YouTu
 const builtMenu = isDarwin ? Menu.buildFromTemplate(template) : null; // null for performance https://www.electronjs.org/docs/latest/tutorial/performance#8-call-menusetapplicationmenunull-when-you-do-not-need-a-default-menu
 Menu.setApplicationMenu(builtMenu);
 
+const adBlocker = new AdBlocker();
 const companionServer = new CompanionServer();
 const customCss = new CustomCSS();
 const discordPresence = new DiscordPresence();
@@ -368,7 +370,8 @@ const store = new Conf<StoreSchema>({
       companionServerAuthTokens: null,
       companionServerCORSWildcardEnabled: false,
       discordPresenceEnabled: false,
-      lastFMEnabled: false
+      lastFMEnabled: false,
+      adBlockEnabled: false
     },
     shortcuts: {
       playPause: "",
@@ -421,6 +424,11 @@ const store = new Conf<StoreSchema>({
     ">=2.0.7": store => {
       if (!store.has("appearance.trayIconStyle")) {
         store.set("appearance.trayIconStyle", 0);
+      }
+    },
+    ">=2.0.12": store => {
+      if (!store.has("integrations.adBlockEnabled")) {
+        store.set("integrations.adBlockEnabled", false);
       }
     }
   }
@@ -524,6 +532,17 @@ store.onDidAnyChange(async (newState, oldState) => {
       await companionServer.disable();
       await companionServer.enable();
     }
+  }
+
+  if (newState.integrations.adBlockEnabled) {
+    adBlocker.provide(memoryStore, ytmView);
+  }
+  if (newState.integrations.adBlockEnabled && !oldState.integrations.adBlockEnabled) {
+    await adBlocker.enable();
+    log.info("Integration enabled: Ad blocker");
+  } else if (!newState.integrations.adBlockEnabled && oldState.integrations.adBlockEnabled) {
+    adBlocker.disable();
+    log.info("Integration disabled: Ad blocker");
   }
 
   if (newState.integrations.discordPresenceEnabled) {
@@ -1016,7 +1035,7 @@ function isPreventedNavOrRedirect(url: URL): boolean {
   );
 }
 
-const createYTMView = (): void => {
+const createYTMView = async (): Promise<void> => {
   memoryStore.set("ytmViewLoadTimedout", false);
   memoryStore.set("ytmViewLoading", true);
   memoryStore.set("ytmViewLoadingStatus", "Initializing...");
@@ -1172,6 +1191,12 @@ const createYTMView = (): void => {
       memoryStore.set("ytmViewLoadingStatus", `Failed to load YouTube Music: ${errorDescription} (${errorCode})`);
     }
   });
+
+  if (store.get("integrations.adBlockEnabled")) {
+    memoryStore.set("ytmViewLoadingStatus", "Preparing content blocker...");
+    adBlocker.provide(memoryStore, ytmView);
+    await adBlocker.enable();
+  }
 
   memoryStore.set("ytmViewLoadingStatus", "Initialized");
 
