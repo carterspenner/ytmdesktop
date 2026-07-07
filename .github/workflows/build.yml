@@ -117,7 +117,10 @@ jobs:
           useradd -m builder
           chown -R builder:builder .
           YTMD_PKGVER=$(node -p "require('../../package.json').version")
-          su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm"
+          # --nodeps: this only assembles the archive from already-built binaries, it doesn't
+          # compile anything, so the runtime libraries in depends=() don't need to be installed
+          # on the machine doing the packaging.
+          su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm --nodeps"
 
       - name: Upload artifacts (${{ matrix.arch.node }})
         uses: actions/upload-artifact@v4
