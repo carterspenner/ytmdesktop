@@ -96,10 +96,13 @@ jobs:
         run: node .yarn/releases/yarn-*.cjs package --arch ${{ matrix.arch.node }} --platform linux
 
       - name: Stage packaged app for makepkg
-        # electron-packager derives the output folder name from package.json's productName
-        # rather than executableName, so it's discovered by glob instead of hardcoded.
         run: |
-          mv out/*-linux-${{ matrix.arch.node }} out/app
+          echo "--- out/ contents ---"
+          ls -la out/
+          find out -maxdepth 2 -print
+          PACKAGE_DIR=$(find out -maxdepth 1 -mindepth 1 -type d | head -n 1)
+          echo "Using package dir: $PACKAGE_DIR"
+          mv "$PACKAGE_DIR" out/app
           tar -C out -czf packaging/arch/app.tar.gz app
           cp src/assets/icons/ytmd.png packaging/arch/youtube-music-desktop-app.png
 
