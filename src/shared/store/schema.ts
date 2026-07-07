@@ -35,6 +35,7 @@ export type StoreSchema = {
     companionServerCORSWildcardEnabled: boolean;
     discordPresenceEnabled: boolean;
     lastFMEnabled: boolean;
+    adBlockEnabled: boolean;
   };
   shortcuts: {
     playPause: string;
@@ -83,4 +84,5 @@ export type MemoryStoreSchema = {
   ytmViewUnresponsive: boolean;
   appUpdateAvailable: boolean;
   appUpdateDownloaded: boolean;
+  adBlockerLoadFailed: boolean;
 };

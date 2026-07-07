@@ -61,6 +61,7 @@ const companionServerAuthTokens = ref<AuthToken[]>(
 const companionServerCORSWildcardEnabled = ref<boolean>(integrations.companionServerCORSWildcardEnabled);
 const discordPresenceEnabled = ref<boolean>(integrations.discordPresenceEnabled);
 const lastFMEnabled = ref<boolean>(integrations.lastFMEnabled);
+const adBlockEnabled = ref<boolean>(integrations.adBlockEnabled);
 
 const shortcutPlayPause = ref<string>(shortcuts.playPause);
 const shortcutNext = ref<string>(shortcuts.next);
@@ -99,6 +100,7 @@ store.onDidAnyChange(async newState => {
   companionServerCORSWildcardEnabled.value = newState.integrations.companionServerCORSWildcardEnabled;
   discordPresenceEnabled.value = newState.integrations.discordPresenceEnabled;
   lastFMEnabled.value = newState.integrations.lastFMEnabled;
+  adBlockEnabled.value = newState.integrations.adBlockEnabled;
   lastFMSessionKey.value = newState.lastfm.sessionKey;
   scrobblePercent.value = newState.lastfm.scrobblePercent;
 
@@ -112,6 +114,7 @@ store.onDidAnyChange(async newState => {
 });
 
 const discordPresenceConnectionFailed = ref<boolean>(await memoryStore.get("discordPresenceConnectionFailed"));
+const adBlockerLoadFailed = ref<boolean>(await memoryStore.get("adBlockerLoadFailed"));
 
 const shortcutsPlayPauseRegisterFailed = ref<boolean>(await memoryStore.get("shortcutsPlayPauseRegisterFailed"));
 const shortcutsNextRegisterFailed = ref<boolean>(await memoryStore.get("shortcutsNextRegisterFailed"));
@@ -127,6 +130,7 @@ const autoUpdaterDisabled = ref<boolean>(await memoryStore.get("autoUpdaterDisab
 
 memoryStore.onStateChanged(newState => {
   discordPresenceConnectionFailed.value = newState.discordPresenceConnectionFailed;
+  adBlockerLoadFailed.value = newState.adBlockerLoadFailed;
 
   shortcutsPlayPauseRegisterFailed.value = newState.shortcutsPlayPauseRegisterFailed;
   shortcutsNextRegisterFailed.value = newState.shortcutsNextRegisterFailed;
@@ -169,6 +173,7 @@ async function settingsChanged() {
   store.set("integrations.companionServerCORSWildcardEnabled", companionServerCORSWildcardEnabled.value);
   store.set("integrations.discordPresenceEnabled", discordPresenceEnabled.value);
   store.set("integrations.lastFMEnabled", lastFMEnabled.value);
+  store.set("integrations.adBlockEnabled", adBlockEnabled.value);
   store.set("lastfm.scrobblePercent", scrobblePercent.value);
 
   store.set("shortcuts.playPause", shortcutPlayPause.value);
@@ -202,6 +207,13 @@ async function restartDiscordPresence() {
   discordPresenceEnabled.value = false;
   await settingsChanged();
   discordPresenceEnabled.value = true;
+  await settingsChanged();
+}
+
+async function retryAdBlocker() {
+  adBlockEnabled.value = false;
+  await settingsChanged();
+  adBlockEnabled.value = true;
   await settingsChanged();
 }
 
@@ -406,6 +418,17 @@ window.ytmd.handleUpdateDownloaded(() => {
           <div v-if="discordPresenceEnabled && discordPresenceConnectionFailed" class="setting indented">
             <p class="discord-failure">Discord connection could not be established after 30 attempts</p>
             <button @click="restartDiscordPresence">Retry</button>
+          </div>
+          <YTMDSetting
+            v-model="adBlockEnabled"
+            type="checkbox"
+            name="Ad blocking (uBlock Origin)"
+            description="Downloads and loads the uBlock Origin browser extension into the YouTube Music view. This is an unofficial, third-party extension not affiliated with YTMD; ad blocking may violate YouTube's Terms of Service."
+            @change="settingsChanged"
+          />
+          <div v-if="adBlockEnabled && adBlockerLoadFailed" class="setting indented">
+            <p class="discord-failure">Could not download or load uBlock Origin. Check your internet connection.</p>
+            <button @click="retryAdBlocker">Retry</button>
           </div>
           <YTMDSetting
             v-model="lastFMEnabled"
