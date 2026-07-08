@@ -47,7 +47,11 @@ function installAlarmsPolyfill(): void {
   // Only extensions that actually declare wanting chrome.alarms get it. Defining it unconditionally
   // for every extension in the session risks changing another extension's own feature detection
   // (e.g. "use alarms if available, otherwise poll") in ways it was never exercised against.
-  if (chrome.alarms || !hasPermission("alarms")) return;
+  //
+  // Not guarded on chrome.alarms already being present: like chrome.storage.sync, Electron defines
+  // it as a stub object whose methods exist but always fail, so a truthiness check would never
+  // trigger our replacement.
+  if (!hasPermission("alarms")) return;
 
   const timers = new Map<string, { timeoutId: ReturnType<typeof setTimeout>; periodInMinutes?: number }>();
   const listeners = new Set<(alarm: Alarm) => void>();
@@ -119,7 +123,10 @@ function installAlarmsPolyfill(): void {
 }
 
 function installStorageSyncPolyfill(): void {
-  if (!chrome.storage || chrome.storage.sync) return;
+  // Electron already defines chrome.storage.sync as a stub whose methods exist but always error
+  // with "sync is not available in this instance of Chrome" via chrome.runtime.lastError - it's
+  // truthy, not undefined, so this can't be guarded on presence and must always be replaced.
+  if (!chrome.storage) return;
 
   const local = chrome.storage.local;
   // All sync-polyfill data lives nested under this single local storage key, rather than sharing
