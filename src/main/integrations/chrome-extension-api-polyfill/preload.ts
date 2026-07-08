@@ -43,6 +43,15 @@ function hasPermission(name: string): boolean {
   }
 }
 
+// Electron defines chrome.alarms and chrome.storage.sync as non-writable (but configurable)
+// properties - a plain `chrome.alarms = ...` assignment throws "Cannot assign to read only
+// property" in this preload's strict-mode module scope, which aborts the entire preload script
+// before anything else in it runs. redefineProperty() replaces the property descriptor instead,
+// which works on non-writable properties as long as they're still configurable.
+function redefineProperty(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
+}
+
 function installAlarmsPolyfill(): void {
   // Only extensions that actually declare wanting chrome.alarms get it. Defining it unconditionally
   // for every extension in the session risks changing another extension's own feature detection
@@ -91,7 +100,7 @@ function installAlarmsPolyfill(): void {
   // worker for. If Electron ever terminates an extension's service worker between alarms, scheduled
   // alarms are lost - acceptable here since this app doesn't aggressively evict extension service
   // workers the way mobile Chrome does.
-  chrome.alarms = {
+  redefineProperty(chrome, "alarms", {
     create,
     get(name: string, callback?: (alarm?: Alarm) => void) {
       const timer = timers.get(name);
@@ -119,7 +128,7 @@ function installAlarmsPolyfill(): void {
       removeListener: (listener: (alarm: Alarm) => void) => listeners.delete(listener),
       hasListener: (listener: (alarm: Alarm) => void) => listeners.has(listener)
     }
-  };
+  });
 }
 
 function installStorageSyncPolyfill(): void {
@@ -152,7 +161,7 @@ function installStorageSyncPolyfill(): void {
   // This is a single-user desktop app with no concept of syncing across devices, so this store is
   // just chrome.storage.local's persistence under the hood - extensions get a working, persisted
   // store instead of a crash, they just don't get real multi-device sync (which isn't meaningful here).
-  chrome.storage.sync = {
+  redefineProperty(chrome.storage, "sync", {
     get(keys: unknown, callback: (items: Record<string, unknown>) => void) {
       readNamespace(all => {
         if (keys == null) return callback(all);
@@ -177,12 +186,23 @@ function installStorageSyncPolyfill(): void {
     clear(callback?: () => void) {
       writeNamespace({}, callback);
     }
-  };
+  });
 }
 
+// Each installer runs in its own try/catch: an uncaught error here aborts the entire preload
+// script (Electron logs "Unable to load preload script" and runs none of it), which would
+// silently take the other polyfill down with it.
 if (typeof chrome !== "undefined") {
-  installAlarmsPolyfill();
-  installStorageSyncPolyfill();
+  try {
+    installAlarmsPolyfill();
+  } catch (error) {
+    console.error("[chrome-extension-api-polyfill] failed to install chrome.alarms", error);
+  }
+  try {
+    installStorageSyncPolyfill();
+  } catch (error) {
+    console.error("[chrome-extension-api-polyfill] failed to install chrome.storage.sync", error);
+  }
 }
 
 // Keeps this file's ambient `chrome` declaration scoped locally instead of leaking into the global
