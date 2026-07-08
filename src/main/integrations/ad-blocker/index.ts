@@ -79,25 +79,14 @@ export default class AdBlocker implements IIntegration {
     }
   }
 
-  // uBlock Origin can load successfully (per Electron) while its background page still throws on
-  // an unsupported chrome.* API and never finishes initializing, silently leaving it with no active
-  // filters. Piping its console into our own logs is the only way to see that from outside a devtools
-  // window, since Electron's own extension support gives no other feedback about background page errors.
+  // uBlock Origin's background page normally runs invisibly; the only failure mode worth
+  // surfacing outside a devtools window is its render process dying outright.
   private watchBackgroundPage(): void {
     if (this.backgroundPageWatcherAttached) return;
     this.backgroundPageWatcherAttached = true;
 
     const attach = (contents: WebContents) => {
       if (contents.getType() !== "backgroundPage") return;
-
-      log.info(`Ad blocker: uBlock Origin background page created (${contents.getURL()})`);
-
-      // Positional (level, message) form used deliberately: the newer single-object
-      // "console-message" overload varies across Electron versions, while this one is stable.
-      contents.on("console-message", (_event, level, message) => {
-        const logFn = level >= 3 ? log.error : level === 2 ? log.warn : log.info;
-        logFn(`Ad blocker (uBlock Origin console): ${message}`);
-      });
 
       contents.on("render-process-gone", (_event, details) => {
         log.error(`Ad blocker: uBlock Origin background page terminated (${details.reason})`);
