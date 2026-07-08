@@ -3,6 +3,12 @@
 // implement: chrome.alarms and chrome.storage.sync. Extensions that call these unconditionally at
 // module scope (as Better Lyrics does with chrome.alarms.onAlarm.addListener) would otherwise crash
 // before any of their own logic runs, the same way uBlock Origin crashed on chrome.browserAction.
+//
+// This preload applies session-wide, to every extension loaded onto it (uBlock Origin included),
+// not just the one that happens to need it - so both polyfills below are written defensively:
+// alarms is only installed for extensions that actually declare the permission, and storage.sync
+// is its own isolated store rather than a raw alias to storage.local, so this can never collide
+// with or corrupt an unrelated extension's own storage.local data.
 
 interface AlarmInfo {
   when?: number;
@@ -16,13 +22,32 @@ interface Alarm {
   periodInMinutes?: number;
 }
 
-declare const chrome: {
-  alarms?: unknown;
-  storage?: { local: unknown; sync?: unknown };
+type StorageArea = {
+  get(keys: unknown, callback: (items: Record<string, unknown>) => void): void;
+  set(items: Record<string, unknown>, callback?: () => void): void;
+  remove(keys: string | string[], callback?: () => void): void;
+  clear(callback?: () => void): void;
 };
 
+declare const chrome: {
+  alarms?: unknown;
+  storage?: { local: StorageArea; sync?: StorageArea };
+  runtime?: { getManifest?: () => { permissions?: string[] } };
+};
+
+function hasPermission(name: string): boolean {
+  try {
+    return !!chrome.runtime?.getManifest?.().permissions?.includes(name);
+  } catch {
+    return false;
+  }
+}
+
 function installAlarmsPolyfill(): void {
-  if (chrome.alarms) return;
+  // Only extensions that actually declare wanting chrome.alarms get it. Defining it unconditionally
+  // for every extension in the session risks changing another extension's own feature detection
+  // (e.g. "use alarms if available, otherwise poll") in ways it was never exercised against.
+  if (chrome.alarms || !hasPermission("alarms")) return;
 
   const timers = new Map<string, { timeoutId: ReturnType<typeof setTimeout>; periodInMinutes?: number }>();
   const listeners = new Set<(alarm: Alarm) => void>();
@@ -94,12 +119,58 @@ function installAlarmsPolyfill(): void {
 }
 
 function installStorageSyncPolyfill(): void {
-  // This is a single-user desktop app with no concept of syncing across devices, so aliasing sync
-  // to Electron's native chrome.storage.local implementation (rather than writing a separate no-op
-  // store) is the pragmatic choice: extensions get a working, persisted store instead of a crash.
-  if (chrome.storage && !chrome.storage.sync) {
-    chrome.storage.sync = chrome.storage.local;
+  if (!chrome.storage || chrome.storage.sync) return;
+
+  const local = chrome.storage.local;
+  // All sync-polyfill data lives nested under this single local storage key, rather than sharing
+  // local's top-level keyspace directly - so this can't collide with or overwrite whatever the
+  // extension itself stores in chrome.storage.local, regardless of what key names it happens to use.
+  const NAMESPACE_KEY = "__chromeStorageSyncPolyfill__";
+
+  function readNamespace(callback: (data: Record<string, unknown>) => void): void {
+    local.get(NAMESPACE_KEY, result => callback((result?.[NAMESPACE_KEY] as Record<string, unknown>) || {}));
   }
+
+  function writeNamespace(data: Record<string, unknown>, callback?: () => void): void {
+    local.set({ [NAMESPACE_KEY]: data }, callback);
+  }
+
+  function normalizeKeys(keys: unknown): string[] {
+    if (keys == null) return [];
+    if (typeof keys === "string") return [keys];
+    if (Array.isArray(keys)) return keys;
+    return Object.keys(keys as Record<string, unknown>);
+  }
+
+  // This is a single-user desktop app with no concept of syncing across devices, so this store is
+  // just chrome.storage.local's persistence under the hood - extensions get a working, persisted
+  // store instead of a crash, they just don't get real multi-device sync (which isn't meaningful here).
+  chrome.storage.sync = {
+    get(keys: unknown, callback: (items: Record<string, unknown>) => void) {
+      readNamespace(all => {
+        if (keys == null) return callback(all);
+        const defaults = typeof keys === "object" && !Array.isArray(keys) ? (keys as Record<string, unknown>) : {};
+        const result: Record<string, unknown> = { ...defaults };
+        for (const key of normalizeKeys(keys)) {
+          if (key in all) result[key] = all[key];
+        }
+        callback(result);
+      });
+    },
+    set(items: Record<string, unknown>, callback?: () => void) {
+      readNamespace(all => writeNamespace({ ...all, ...items }, callback));
+    },
+    remove(keys: string | string[], callback?: () => void) {
+      readNamespace(all => {
+        const next = { ...all };
+        for (const key of normalizeKeys(keys)) delete next[key];
+        writeNamespace(next, callback);
+      });
+    },
+    clear(callback?: () => void) {
+      writeNamespace({}, callback);
+    }
+  };
 }
 
 if (typeof chrome !== "undefined") {
