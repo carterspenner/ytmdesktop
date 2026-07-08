@@ -31,7 +31,7 @@ import { MemoryStoreSchema, StoreSchema, TrayIconStyle } from "../shared/store/s
 import AdBlocker from "./integrations/ad-blocker";
 import BetterLyrics from "./integrations/better-lyrics";
 import CompanionServer from "./integrations/companion-server";
-import { ensureChromeExtensionsSupport } from "./integrations/chrome-extension-host";
+import { addYtmViewTab, ensureChromeExtensionsSupport } from "./integrations/chrome-extension-host";
 import CustomCSS from "./integrations/custom-css";
 import DiscordPresence from "./integrations/discord-presence";
 import LastFM from "./integrations/last-fm";
@@ -49,6 +49,9 @@ declare const YTMD_UPDATE_FEED_REPOSITORY: string;
 
 const assetFolder = path.join(process.env.NODE_ENV === "development" ? path.join(app.getAppPath(), "src/assets") : process.resourcesPath);
 const isDarwin = process.platform === "darwin";
+// Shared with createYTMView()'s BrowserView and the early chrome-extensions setup in
+// createMainWindow(), which needs the ytmView session before ytmView itself exists.
+const YTM_VIEW_PARTITION = app.isPackaged ? "persist:ytmview" : "persist:ytmview-dev";
 
 let applicationExited = false;
 let applicationQuitting = false;
@@ -1064,7 +1067,7 @@ const createYTMView = async (): Promise<void> => {
     webPreferences: {
       sandbox: true,
       contextIsolation: true,
-      partition: app.isPackaged ? "persist:ytmview" : "persist:ytmview-dev",
+      partition: YTM_VIEW_PARTITION,
       preload: path.join(__dirname, `../renderer/windows/ytmview/preload.js`),
       autoplayPolicy: store.get("playback.continueWhereYouLeftOffPaused") ? "document-user-activation-required" : "no-user-gesture-required"
     }
@@ -1073,11 +1076,11 @@ const createYTMView = async (): Promise<void> => {
   customCss.provide(store, ytmView);
   ratioVolume.provide(ytmView);
 
-  // Set up unconditionally (not just when an extension-based integration enables) so the main
-  // window's titlebar <browser-action-list> has a 'crx-msg-remote' handler to talk to as soon as
-  // it mounts, rather than racing whichever integration happens to load an extension first.
+  // Registers ytmView as a tracked tab (chrome-extensions support itself is already set up in
+  // createMainWindow(), before ytmView existed, so the titlebar's <browser-action-list> has a
+  // 'crx-msg-remote' handler to talk to as soon as it mounts).
   if (mainWindow) {
-    ensureChromeExtensionsSupport(ytmView, mainWindow);
+    addYtmViewTab(ytmView, mainWindow);
   }
 
   // Attach events to ytm view
@@ -1378,6 +1381,14 @@ const createMainWindow = (): void => {
       });
     }
   });
+
+  // Set up chrome-extensions support against ytmView's session before its renderer even starts
+  // loading, using session.fromPartition() rather than waiting on ytmView itself to be created
+  // (which happens later, after some intervening update-check/store logic in the startup
+  // sequence). This registers the 'crx-msg-remote' IPC handler the titlebar's <browser-action-list>
+  // needs as soon as it mounts - addTab() itself happens later, in createYTMView(), once ytmView
+  // actually exists.
+  ensureChromeExtensionsSupport(session.fromPartition(YTM_VIEW_PARTITION));
 
   // and load the index.html of the app.
   if (ALL_WINDOWS_VITE_DEV_SERVER_URL) mainWindow.loadURL(ALL_WINDOWS_VITE_DEV_SERVER_URL + "/windows/main/index.html");

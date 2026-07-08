@@ -1,4 +1,6 @@
-import { BrowserView, BrowserWindow } from "electron";
+import { BrowserView, BrowserWindow, Session } from "electron";
+import log from "electron-log";
+import fs from "fs/promises";
 import path from "path";
 import { ElectronChromeExtensions } from "electron-chrome-extensions";
 
@@ -18,9 +20,7 @@ function resolveApiPolyfillPreloadPath(): string {
   return path.join(__dirname, "chrome-extension-api-polyfill", "preload.js");
 }
 
-export function ensureChromeExtensionsSupport(ytmView: BrowserView, mainWindow: BrowserWindow): ElectronChromeExtensions {
-  const session = ytmView.webContents.session;
-
+export function ensureChromeExtensionsSupport(session: Session): ElectronChromeExtensions {
   const existing = ElectronChromeExtensions.fromSession(session);
   if (existing) return existing;
 
@@ -32,8 +32,6 @@ export function ensureChromeExtensionsSupport(ytmView: BrowserView, mainWindow: 
     // next to this file's own compiled output at build time.
     modulePath: __dirname
   });
-
-  chromeExtensions.addTab(ytmView.webContents, mainWindow);
 
   // Required for <browser-action-list> (used by the main window's titlebar) to display extension
   // icons, which it fetches through this protocol.
@@ -51,4 +49,62 @@ export function ensureChromeExtensionsSupport(ytmView: BrowserView, mainWindow: 
   });
 
   return chromeExtensions;
+}
+
+// Registers ytmView as a tracked tab so extension APIs like chrome.tabs and the titlebar's
+// <browser-action-list> can address it. Split out from ensureChromeExtensionsSupport() so the
+// latter can be called as soon as the ytmView session exists (via session.fromPartition(), well
+// before ytmView itself is constructed) - the titlebar's first 'crx-msg-remote' IPC call otherwise
+// races ahead of ytmView's creation and is never retried, leaving the toolbar icon permanently
+// blank for that session. addTab() itself is idempotent, so calling this repeatedly is harmless.
+export function addYtmViewTab(ytmView: BrowserView, mainWindow: BrowserWindow): void {
+  const chromeExtensions = ensureChromeExtensionsSupport(ytmView.webContents.session);
+  chromeExtensions.addTab(ytmView.webContents, mainWindow);
+}
+
+const CONTENT_SCRIPT_POLYFILL_FILENAME = "__ytmd_chrome_api_polyfill__.js";
+
+interface ExtensionManifest {
+  content_scripts?: { js?: string[] }[];
+}
+
+// The session-wide preload registered by ensureChromeExtensionsSupport() only reaches background
+// pages and service workers - content scripts run in their own isolated world within the host page
+// (e.g. music.youtube.com), which a session-registered preload script never touches. Better Lyrics
+// needs a working chrome.storage.sync from its content script specifically, so the same polyfill
+// script is instead injected directly into the extension's own manifest as an additional content
+// script, prepended so it runs before the extension's own, in the same isolated world.
+//
+// extensionDir is a directory we fully control (downloaded and unpacked by extension-provisioner.ts
+// into our own userData cache), so patching it here is safe and has no effect on the upstream
+// source. Best-effort: any failure here just means content scripts don't get the polyfill, not that
+// the extension fails to load at all.
+export async function injectApiPolyfillContentScript(extensionDir: string): Promise<void> {
+  const manifestPath = path.join(extensionDir, "manifest.json");
+
+  let manifest: ExtensionManifest;
+  try {
+    manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as ExtensionManifest;
+  } catch (error) {
+    log.warn("chrome-extension-host: could not read manifest.json to inject content-script polyfill", error);
+    return;
+  }
+
+  const contentScripts = manifest.content_scripts;
+  if (!Array.isArray(contentScripts) || contentScripts.length === 0) return;
+
+  let changed = false;
+  for (const entry of contentScripts) {
+    if (!Array.isArray(entry.js) || entry.js[0] === CONTENT_SCRIPT_POLYFILL_FILENAME) continue;
+    entry.js.unshift(CONTENT_SCRIPT_POLYFILL_FILENAME);
+    changed = true;
+  }
+  if (!changed) return;
+
+  try {
+    await fs.copyFile(resolveApiPolyfillPreloadPath(), path.join(extensionDir, CONTENT_SCRIPT_POLYFILL_FILENAME));
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+  } catch (error) {
+    log.warn("chrome-extension-host: failed to inject content-script polyfill", error);
+  }
 }

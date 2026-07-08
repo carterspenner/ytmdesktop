@@ -5,7 +5,7 @@ import IIntegration from "../integration";
 import MemoryStore from "../../memory-store";
 import { MemoryStoreSchema } from "~shared/store/schema";
 import { ensureUBlockOriginExtension } from "./extension-provisioner";
-import { ensureChromeExtensionsSupport } from "../chrome-extension-host";
+import { addYtmViewTab, injectApiPolyfillContentScript } from "../chrome-extension-host";
 
 export default class AdBlocker implements IIntegration {
   private ytmView: BrowserView | null = null;
@@ -38,7 +38,8 @@ export default class AdBlocker implements IIntegration {
       }
       const extensionPath = await this.preparePromise;
 
-      ensureChromeExtensionsSupport(this.ytmView, this.mainWindow);
+      addYtmViewTab(this.ytmView, this.mainWindow);
+      await injectApiPolyfillContentScript(extensionPath);
 
       // Deliberately not reloading ytmView here: reload() is subject to YTM's own
       // beforeunload handler (active during playback), which pops the disruptive
