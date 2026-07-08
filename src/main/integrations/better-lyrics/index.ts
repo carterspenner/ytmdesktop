@@ -1,20 +1,19 @@
-import { app, BrowserView, BrowserWindow, WebContents, webContents } from "electron";
+import { BrowserView, BrowserWindow } from "electron";
 import log from "electron-log";
 
 import IIntegration from "../integration";
 import MemoryStore from "../../memory-store";
 import { MemoryStoreSchema } from "~shared/store/schema";
-import { ensureUBlockOriginExtension } from "./extension-provisioner";
+import { ensureBetterLyricsExtension } from "./extension-provisioner";
 import { ensureChromeExtensionsSupport } from "../chrome-extension-host";
 
-export default class AdBlocker implements IIntegration {
+export default class BetterLyrics implements IIntegration {
   private ytmView: BrowserView | null = null;
   private mainWindow: BrowserWindow | null = null;
   private memoryStore: MemoryStore<MemoryStoreSchema> | null = null;
   private isEnabled = false;
   private loadedExtensionId: string | null = null;
   private preparePromise: Promise<string> | null = null;
-  private backgroundPageWatcherAttached = false;
 
   public provide(memoryStore: MemoryStore<MemoryStoreSchema>, ytmView: BrowserView, mainWindow: BrowserWindow): void {
     this.memoryStore = memoryStore;
@@ -34,46 +33,26 @@ export default class AdBlocker implements IIntegration {
 
     try {
       if (!this.preparePromise) {
-        this.preparePromise = ensureUBlockOriginExtension();
+        this.preparePromise = ensureBetterLyricsExtension();
       }
       const extensionPath = await this.preparePromise;
 
       ensureChromeExtensionsSupport(this.ytmView, this.mainWindow);
 
-      // Deliberately not reloading ytmView here: reload() is subject to YTM's own
-      // beforeunload handler (active during playback), which pops the disruptive
-      // "YouTube Music is preventing navigation" dialog. The extension only takes
-      // effect on the next navigation, so this setting is flagged restart-required
-      // in Settings.vue instead.
+      // Deliberately not reloading ytmView here, for the same reason as the ad blocker: reload()
+      // triggers YTM's own beforeunload handler and this app's "prevent navigation" dialog. The
+      // extension only takes effect on the next navigation, so this setting is flagged
+      // restart-required in Settings.vue instead.
       const extension = await this.ytmView.webContents.session.extensions.loadExtension(extensionPath);
       this.loadedExtensionId = extension.id;
-      this.memoryStore?.set("adBlockerLoadFailed", false);
-      log.info(`Ad blocker: loaded uBlock Origin (${extension.version})`);
-      this.watchBackgroundPage();
+      this.memoryStore?.set("betterLyricsLoadFailed", false);
+      log.info(`Better Lyrics: loaded (${extension.version})`);
     } catch (error) {
-      log.error("Ad blocker: failed to load uBlock Origin", error);
-      this.memoryStore?.set("adBlockerLoadFailed", true);
+      log.error("Better Lyrics: failed to load", error);
+      this.memoryStore?.set("betterLyricsLoadFailed", true);
     } finally {
       this.preparePromise = null;
     }
-  }
-
-  // uBlock Origin's background page normally runs invisibly; the only failure mode worth
-  // surfacing outside a devtools window is its render process dying outright.
-  private watchBackgroundPage(): void {
-    if (this.backgroundPageWatcherAttached) return;
-    this.backgroundPageWatcherAttached = true;
-
-    const attach = (contents: WebContents) => {
-      if (contents.getType() !== "backgroundPage") return;
-
-      contents.on("render-process-gone", (_event, details) => {
-        log.error(`Ad blocker: uBlock Origin background page terminated (${details.reason})`);
-      });
-    };
-
-    app.on("web-contents-created", (_event, contents) => attach(contents));
-    for (const contents of webContents.getAllWebContents()) attach(contents);
   }
 
   public disable(): void {
@@ -83,11 +62,11 @@ export default class AdBlocker implements IIntegration {
     try {
       this.ytmView.webContents.session.extensions.removeExtension(this.loadedExtensionId);
     } catch (error) {
-      log.error("Ad blocker: failed to remove uBlock Origin", error);
+      log.error("Better Lyrics: failed to remove", error);
     }
 
     this.loadedExtensionId = null;
-    this.memoryStore?.set("adBlockerLoadFailed", false);
+    this.memoryStore?.set("betterLyricsLoadFailed", false);
   }
 
   public getYTMScripts(): { name: string; script: string }[] {

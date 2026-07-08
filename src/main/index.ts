@@ -29,6 +29,7 @@ import playerStateStore, { PlayerState, VideoState } from "./player-state-store"
 import { MemoryStoreSchema, StoreSchema, TrayIconStyle } from "../shared/store/schema";
 
 import AdBlocker from "./integrations/ad-blocker";
+import BetterLyrics from "./integrations/better-lyrics";
 import CompanionServer from "./integrations/companion-server";
 import CustomCSS from "./integrations/custom-css";
 import DiscordPresence from "./integrations/discord-presence";
@@ -163,6 +164,7 @@ const builtMenu = isDarwin ? Menu.buildFromTemplate(template) : null; // null fo
 Menu.setApplicationMenu(builtMenu);
 
 const adBlocker = new AdBlocker();
+const betterLyrics = new BetterLyrics();
 const companionServer = new CompanionServer();
 const customCss = new CustomCSS();
 const discordPresence = new DiscordPresence();
@@ -371,7 +373,8 @@ const store = new Conf<StoreSchema>({
       companionServerCORSWildcardEnabled: false,
       discordPresenceEnabled: false,
       lastFMEnabled: false,
-      adBlockEnabled: false
+      adBlockEnabled: false,
+      betterLyricsEnabled: false
     },
     shortcuts: {
       playPause: "",
@@ -429,6 +432,11 @@ const store = new Conf<StoreSchema>({
     ">=2.0.12": store => {
       if (!store.has("integrations.adBlockEnabled")) {
         store.set("integrations.adBlockEnabled", false);
+      }
+    },
+    ">=2.0.13": store => {
+      if (!store.has("integrations.betterLyricsEnabled")) {
+        store.set("integrations.betterLyricsEnabled", false);
       }
     }
   }
@@ -543,6 +551,17 @@ store.onDidAnyChange(async (newState, oldState) => {
   } else if (!newState.integrations.adBlockEnabled && oldState.integrations.adBlockEnabled) {
     adBlocker.disable();
     log.info("Integration disabled: Ad blocker");
+  }
+
+  if (newState.integrations.betterLyricsEnabled) {
+    betterLyrics.provide(memoryStore, ytmView, mainWindow);
+  }
+  if (newState.integrations.betterLyricsEnabled && !oldState.integrations.betterLyricsEnabled) {
+    await betterLyrics.enable();
+    log.info("Integration enabled: Better Lyrics");
+  } else if (!newState.integrations.betterLyricsEnabled && oldState.integrations.betterLyricsEnabled) {
+    betterLyrics.disable();
+    log.info("Integration disabled: Better Lyrics");
   }
 
   if (newState.integrations.discordPresenceEnabled) {
@@ -1196,6 +1215,12 @@ const createYTMView = async (): Promise<void> => {
     memoryStore.set("ytmViewLoadingStatus", "Preparing content blocker...");
     adBlocker.provide(memoryStore, ytmView, mainWindow);
     await adBlocker.enable();
+  }
+
+  if (store.get("integrations.betterLyricsEnabled")) {
+    memoryStore.set("ytmViewLoadingStatus", "Preparing lyrics...");
+    betterLyrics.provide(memoryStore, ytmView, mainWindow);
+    await betterLyrics.enable();
   }
 
   memoryStore.set("ytmViewLoadingStatus", "Initialized");

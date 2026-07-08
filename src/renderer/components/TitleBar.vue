@@ -94,6 +94,7 @@ if (props.isMainWindow) {
       </div>
       <div class="app-buttons">
         <slot name="app-buttons"></slot>
+        <browser-action-list v-if="isMainWindow" class="extension-actions" partition="persist:ytmview"></browser-action-list>
         <button v-if="hasHomeButton" class="app-button" tabindex="2" @click="navigateToDefault">
           <span class="material-symbols-outlined">home</span>
         </button>
@@ -147,7 +148,14 @@ if (props.isMainWindow) {
 .titlebar .right .app-buttons {
   display: flex;
   flex-direction: row;
+  align-items: center;
   margin-right: 16px;
+}
+
+.extension-actions {
+  --browser-action-hover-bg: rgba(255, 255, 255, 0.15);
+  -webkit-app-region: no-drag;
+  margin-right: 4px;
 }
 
 .title {
