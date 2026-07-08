@@ -13,7 +13,11 @@ const memoryStore = new MemoryStore<MemoryStoreSchema>();
 // show icons (and popups) for extensions loaded onto the ytmView session (ad blocker, lyrics, etc).
 injectBrowserAction();
 
+// Must match the partition ytmView itself is created with in src/main/index.ts.
+const ytmViewPartition = process.env.NODE_ENV === "development" ? "persist:ytmview-dev" : "persist:ytmview";
+
 contextBridge.exposeInMainWorld("ytmd", {
+  ytmViewPartition,
   minimizeWindow: () => ipcRenderer.send("mainWindow:minimize"),
   maximizeWindow: () => ipcRenderer.send("mainWindow:maximize"),
   restoreWindow: () => ipcRenderer.send("mainWindow:restore"),

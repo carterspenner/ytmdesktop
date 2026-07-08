@@ -33,6 +33,10 @@ const closeWindow = window.ytmd.closeWindow;
 const openSettingsWindow = window.ytmd.openSettingsWindow;
 const navigateToDefault = window.ytmd.ytmViewNavigateDefault;
 
+// Only exposed by the main window's preload; undefined (and unused, since browser-action-list is
+// only rendered for isMainWindow) in this component's other hosts (settings, authorize-companion).
+const ytmViewPartition = window.ytmd.ytmViewPartition;
+
 const wcoVisible = ref(window.navigator.windowControlsOverlay.visible);
 const windowMaximized = ref(false);
 const windowFullscreen = ref(false);
@@ -94,7 +98,7 @@ if (props.isMainWindow) {
       </div>
       <div class="app-buttons">
         <slot name="app-buttons"></slot>
-        <browser-action-list v-if="isMainWindow" class="extension-actions" partition="persist:ytmview"></browser-action-list>
+        <browser-action-list v-if="isMainWindow" class="extension-actions" :partition="ytmViewPartition"></browser-action-list>
         <button v-if="hasHomeButton" class="app-button" tabindex="2" @click="navigateToDefault">
           <span class="material-symbols-outlined">home</span>
         </button>

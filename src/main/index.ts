@@ -31,6 +31,7 @@ import { MemoryStoreSchema, StoreSchema, TrayIconStyle } from "../shared/store/s
 import AdBlocker from "./integrations/ad-blocker";
 import BetterLyrics from "./integrations/better-lyrics";
 import CompanionServer from "./integrations/companion-server";
+import { ensureChromeExtensionsSupport } from "./integrations/chrome-extension-host";
 import CustomCSS from "./integrations/custom-css";
 import DiscordPresence from "./integrations/discord-presence";
 import LastFM from "./integrations/last-fm";
@@ -1071,6 +1072,13 @@ const createYTMView = async (): Promise<void> => {
   companionServer.provide(store, memoryStore, ytmView);
   customCss.provide(store, ytmView);
   ratioVolume.provide(ytmView);
+
+  // Set up unconditionally (not just when an extension-based integration enables) so the main
+  // window's titlebar <browser-action-list> has a 'crx-msg-remote' handler to talk to as soon as
+  // it mounts, rather than racing whichever integration happens to load an extension first.
+  if (mainWindow) {
+    ensureChromeExtensionsSupport(ytmView, mainWindow);
+  }
 
   // Attach events to ytm view
   ytmView.webContents.on("will-navigate", event => {
