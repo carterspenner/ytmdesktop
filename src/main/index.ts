@@ -1156,6 +1156,14 @@ const createYTMView = async (): Promise<void> => {
               });
             }
           }
+        },
+        {
+          label: "Open Ad Blocker Developer Tools",
+          type: "normal",
+          visible: store.get("integrations.adBlockEnabled"),
+          click: () => {
+            adBlocker.openBackgroundPageDevTools();
+          }
         }
       ]).popup({
         window: mainWindow,

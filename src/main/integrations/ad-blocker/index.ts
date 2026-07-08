@@ -77,6 +77,21 @@ export default class AdBlocker implements IIntegration {
     for (const contents of webContents.getAllWebContents()) attach(contents);
   }
 
+  // Opens uBlock Origin's own background page devtools, so its actual console output (filter list
+  // load failures, webRequest errors, etc.) is inspectable - useful for diagnosing ad-blocking
+  // issues that don't throw anywhere in *our* code, since uBlock's background page otherwise runs
+  // completely invisibly with no way to see what it's doing.
+  public openBackgroundPageDevTools(): void {
+    if (!this.loadedExtensionId) return;
+
+    const backgroundPageUrl = `chrome-extension://${this.loadedExtensionId}/`;
+    const backgroundPage = webContents
+      .getAllWebContents()
+      .find(contents => contents.getType() === "backgroundPage" && contents.getURL().startsWith(backgroundPageUrl));
+
+    backgroundPage?.openDevTools({ mode: "detach" });
+  }
+
   public disable(): void {
     this.isEnabled = false;
     if (!this.ytmView || !this.loadedExtensionId) return;
