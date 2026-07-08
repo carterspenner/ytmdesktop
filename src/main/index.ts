@@ -1396,7 +1396,16 @@ const createMainWindow = (): void => {
   // sequence). This registers the 'crx-msg-remote' IPC handler the titlebar's <browser-action-list>
   // needs as soon as it mounts - addTab() itself happens later, in createYTMView(), once ytmView
   // actually exists.
-  ensureChromeExtensionsSupport(session.fromPartition(YTM_VIEW_PARTITION));
+  const chromeExtensions = ensureChromeExtensionsSupport(session.fromPartition(YTM_VIEW_PARTITION));
+
+  // electron-chrome-extensions creates a bare BrowserWindow per extension popup (e.g. uBlock
+  // Origin's toolbar button) with no built-in way to inspect it if its content fails to render -
+  // auto-open its devtools when developer tools are enabled, the same way ytmView's are.
+  chromeExtensions.on("browser-action-popup-created", popup => {
+    if (store.get("developer.enableDevTools")) {
+      (popup as { browserWindow?: BrowserWindow }).browserWindow?.webContents.openDevTools({ mode: "detach" });
+    }
+  });
 
   // and load the index.html of the app.
   if (ALL_WINDOWS_VITE_DEV_SERVER_URL) mainWindow.loadURL(ALL_WINDOWS_VITE_DEV_SERVER_URL + "/windows/main/index.html");
