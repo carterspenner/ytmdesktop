@@ -5,7 +5,7 @@ import IIntegration from "../integration";
 import MemoryStore from "../../memory-store";
 import { MemoryStoreSchema } from "~shared/store/schema";
 import { ensureBetterLyricsExtension } from "./extension-provisioner";
-import { ensureChromeExtensionsSupport } from "../chrome-extension-host";
+import { addYtmViewTab, injectApiPolyfillContentScript } from "../chrome-extension-host";
 
 export default class BetterLyrics implements IIntegration {
   private ytmView: BrowserView | null = null;
@@ -37,7 +37,8 @@ export default class BetterLyrics implements IIntegration {
       }
       const extensionPath = await this.preparePromise;
 
-      ensureChromeExtensionsSupport(this.ytmView, this.mainWindow);
+      addYtmViewTab(this.ytmView, this.mainWindow);
+      await injectApiPolyfillContentScript(extensionPath);
 
       // Deliberately not reloading ytmView here, for the same reason as the ad blocker: reload()
       // triggers YTM's own beforeunload handler and this app's "prevent navigation" dialog. The

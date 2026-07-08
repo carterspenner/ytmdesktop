@@ -1,14 +1,21 @@
-// Preload script registered onto the ytmView session's extension contexts (background pages and
-// service workers) to fill in two chrome.* APIs that neither Electron nor electron-chrome-extensions
-// implement: chrome.alarms and chrome.storage.sync. Extensions that call these unconditionally at
-// module scope (as Better Lyrics does with chrome.alarms.onAlarm.addListener) would otherwise crash
-// before any of their own logic runs, the same way uBlock Origin crashed on chrome.browserAction.
+// Fills in two chrome.* APIs that neither Electron nor electron-chrome-extensions implement:
+// chrome.alarms and chrome.storage.sync. Extensions that call these unconditionally at module
+// scope (as Better Lyrics does with chrome.alarms.onAlarm.addListener) would otherwise crash before
+// any of their own logic runs, the same way uBlock Origin crashed on chrome.browserAction.
 //
-// This preload applies session-wide, to every extension loaded onto it (uBlock Origin included),
-// not just the one that happens to need it - so both polyfills below are written defensively:
-// alarms is only installed for extensions that actually declare the permission, and storage.sync
-// is its own isolated store rather than a raw alias to storage.local, so this can never collide
-// with or corrupt an unrelated extension's own storage.local data.
+// This same compiled file is used two ways, since neither alone reaches every place a `chrome`
+// object gets created for an extension:
+//  - registered session-wide (see chrome-extension-host.ts) as a preload script for background
+//    pages/service workers, applying to every extension loaded onto that session (uBlock Origin
+//    included), not just the one that happens to need it
+//  - copied into each extension's own unpacked directory and prepended to its manifest's
+//    content_scripts, since content scripts run in an isolated world that a session-wide preload
+//    script never reaches, and Better Lyrics needs chrome.storage.sync there specifically
+//
+// Both polyfills below are written defensively as a result: alarms is only installed for
+// extensions that actually declare the permission, and storage.sync is its own isolated store
+// rather than a raw alias to storage.local, so this can never collide with or corrupt an unrelated
+// extension's own storage.local data.
 
 interface AlarmInfo {
   when?: number;
@@ -43,13 +50,37 @@ function hasPermission(name: string): boolean {
   }
 }
 
-// Electron defines chrome.alarms and chrome.storage.sync as non-writable (but configurable)
+// Electron defines chrome.alarms (and, in some contexts, chrome.storage) as non-writable
 // properties - a plain `chrome.alarms = ...` assignment throws "Cannot assign to read only
 // property" in this preload's strict-mode module scope, which aborts the entire preload script
-// before anything else in it runs. redefineProperty() replaces the property descriptor instead,
-// which works on non-writable properties as long as they're still configurable.
-function redefineProperty(target: object, key: string, value: unknown): void {
-  Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
+// before anything else in it runs.
+//
+// Object.defineProperty() can replace a non-writable-but-configurable property, but chrome.alarms
+// has also been observed non-configurable ("Cannot redefine property: alarms"), so even that
+// fails. When it does, replaceProperty() falls back to wrapping the *parent* object in a Proxy
+// that substitutes our value for this one key and transparently delegates everything else - this
+// works regardless of the original leaf property's descriptor, as long as whatever binding held
+// the parent (passed to onLocked to swap out) can still be reassigned.
+function replaceProperty(target: object, key: string, value: unknown, onLocked: (proxy: object) => void): void {
+  try {
+    Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
+  } catch {
+    onLocked(
+      new Proxy(target, {
+        get(realTarget, prop, receiver) {
+          return prop === key ? value : Reflect.get(realTarget, prop, receiver);
+        }
+      })
+    );
+  }
+}
+
+// `chrome` here is just a normal global property (typed locally below as `declare const chrome`
+// for convenience) - reassigning globalThis.chrome swaps what every subsequently-loaded script in
+// this context sees when it reads the bare `chrome` identifier, regardless of what property
+// descriptors existed on the object it used to point to.
+function replaceGlobalChrome(value: object): void {
+  (globalThis as unknown as { chrome: unknown }).chrome = value;
 }
 
 function installAlarmsPolyfill(): void {
@@ -100,7 +131,7 @@ function installAlarmsPolyfill(): void {
   // worker for. If Electron ever terminates an extension's service worker between alarms, scheduled
   // alarms are lost - acceptable here since this app doesn't aggressively evict extension service
   // workers the way mobile Chrome does.
-  redefineProperty(chrome, "alarms", {
+  const alarmsImpl = {
     create,
     get(name: string, callback?: (alarm?: Alarm) => void) {
       const timer = timers.get(name);
@@ -128,7 +159,9 @@ function installAlarmsPolyfill(): void {
       removeListener: (listener: (alarm: Alarm) => void) => listeners.delete(listener),
       hasListener: (listener: (alarm: Alarm) => void) => listeners.has(listener)
     }
-  });
+  };
+
+  replaceProperty(chrome, "alarms", alarmsImpl, replaceGlobalChrome);
 }
 
 function installStorageSyncPolyfill(): void {
@@ -161,7 +194,7 @@ function installStorageSyncPolyfill(): void {
   // This is a single-user desktop app with no concept of syncing across devices, so this store is
   // just chrome.storage.local's persistence under the hood - extensions get a working, persisted
   // store instead of a crash, they just don't get real multi-device sync (which isn't meaningful here).
-  redefineProperty(chrome.storage, "sync", {
+  const syncImpl = {
     get(keys: unknown, callback: (items: Record<string, unknown>) => void) {
       readNamespace(all => {
         if (keys == null) return callback(all);
@@ -186,6 +219,12 @@ function installStorageSyncPolyfill(): void {
     clear(callback?: () => void) {
       writeNamespace({}, callback);
     }
+  };
+
+  // chrome.storage itself has not been observed locked down, but if it ever is, fall back one more
+  // level rather than assuming - same reasoning as the alarms case above.
+  replaceProperty(chrome.storage, "sync", syncImpl, proxiedStorage => {
+    replaceProperty(chrome, "storage", proxiedStorage, replaceGlobalChrome);
   });
 }
 
