@@ -2,11 +2,16 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 
 import { contextBridge, ipcRenderer } from "electron";
+import { injectBrowserAction } from "electron-chrome-extensions/browser-action";
 import { WindowsEventArguments } from "~shared/types";
 import { MemoryStoreSchema } from "~shared/store/schema";
 import MemoryStore from "../../store-ipc/memory-store";
 
 const memoryStore = new MemoryStore<MemoryStoreSchema>();
+
+// Registers the <browser-action-list>/<browser-action> custom elements used by TitleBar.vue to
+// show icons (and popups) for extensions loaded onto the ytmView session (ad blocker, lyrics, etc).
+injectBrowserAction();
 
 contextBridge.exposeInMainWorld("ytmd", {
   minimizeWindow: () => ipcRenderer.send("mainWindow:minimize"),

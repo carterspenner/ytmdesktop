@@ -103,6 +103,11 @@ const config: ForgeConfig = {
           entry: "src/renderer/ytmview/preload.ts",
           config: "viteconfig/preload/ytmview.ts",
           target: "preload"
+        },
+        {
+          entry: "src/main/integrations/chrome-extension-api-polyfill/preload.ts",
+          config: "viteconfig/preload/chrome_extension_api_polyfill.ts",
+          target: "preload"
         }
       ],
       renderer: [

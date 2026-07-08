@@ -36,6 +36,7 @@ export type StoreSchema = {
     discordPresenceEnabled: boolean;
     lastFMEnabled: boolean;
     adBlockEnabled: boolean;
+    betterLyricsEnabled: boolean;
   };
   shortcuts: {
     playPause: string;
@@ -85,4 +86,5 @@ export type MemoryStoreSchema = {
   appUpdateAvailable: boolean;
   appUpdateDownloaded: boolean;
   adBlockerLoadFailed: boolean;
+  betterLyricsLoadFailed: boolean;
 };

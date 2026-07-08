@@ -62,6 +62,7 @@ const companionServerCORSWildcardEnabled = ref<boolean>(integrations.companionSe
 const discordPresenceEnabled = ref<boolean>(integrations.discordPresenceEnabled);
 const lastFMEnabled = ref<boolean>(integrations.lastFMEnabled);
 const adBlockEnabled = ref<boolean>(integrations.adBlockEnabled);
+const betterLyricsEnabled = ref<boolean>(integrations.betterLyricsEnabled);
 
 const shortcutPlayPause = ref<string>(shortcuts.playPause);
 const shortcutNext = ref<string>(shortcuts.next);
@@ -101,6 +102,7 @@ store.onDidAnyChange(async newState => {
   discordPresenceEnabled.value = newState.integrations.discordPresenceEnabled;
   lastFMEnabled.value = newState.integrations.lastFMEnabled;
   adBlockEnabled.value = newState.integrations.adBlockEnabled;
+  betterLyricsEnabled.value = newState.integrations.betterLyricsEnabled;
   lastFMSessionKey.value = newState.lastfm.sessionKey;
   scrobblePercent.value = newState.lastfm.scrobblePercent;
 
@@ -115,6 +117,7 @@ store.onDidAnyChange(async newState => {
 
 const discordPresenceConnectionFailed = ref<boolean>(await memoryStore.get("discordPresenceConnectionFailed"));
 const adBlockerLoadFailed = ref<boolean>(await memoryStore.get("adBlockerLoadFailed"));
+const betterLyricsLoadFailed = ref<boolean>(await memoryStore.get("betterLyricsLoadFailed"));
 
 const shortcutsPlayPauseRegisterFailed = ref<boolean>(await memoryStore.get("shortcutsPlayPauseRegisterFailed"));
 const shortcutsNextRegisterFailed = ref<boolean>(await memoryStore.get("shortcutsNextRegisterFailed"));
@@ -131,6 +134,7 @@ const autoUpdaterDisabled = ref<boolean>(await memoryStore.get("autoUpdaterDisab
 memoryStore.onStateChanged(newState => {
   discordPresenceConnectionFailed.value = newState.discordPresenceConnectionFailed;
   adBlockerLoadFailed.value = newState.adBlockerLoadFailed;
+  betterLyricsLoadFailed.value = newState.betterLyricsLoadFailed;
 
   shortcutsPlayPauseRegisterFailed.value = newState.shortcutsPlayPauseRegisterFailed;
   shortcutsNextRegisterFailed.value = newState.shortcutsNextRegisterFailed;
@@ -174,6 +178,7 @@ async function settingsChanged() {
   store.set("integrations.discordPresenceEnabled", discordPresenceEnabled.value);
   store.set("integrations.lastFMEnabled", lastFMEnabled.value);
   store.set("integrations.adBlockEnabled", adBlockEnabled.value);
+  store.set("integrations.betterLyricsEnabled", betterLyricsEnabled.value);
   store.set("lastfm.scrobblePercent", scrobblePercent.value);
 
   store.set("shortcuts.playPause", shortcutPlayPause.value);
@@ -215,6 +220,14 @@ async function retryAdBlocker() {
   adBlockEnabled.value = false;
   await settingsChanged();
   adBlockEnabled.value = true;
+  await settingsChanged();
+}
+
+async function retryBetterLyrics() {
+  requiresRestart.value = true;
+  betterLyricsEnabled.value = false;
+  await settingsChanged();
+  betterLyricsEnabled.value = true;
   await settingsChanged();
 }
 
@@ -431,6 +444,18 @@ window.ytmd.handleUpdateDownloaded(() => {
           <div v-if="adBlockEnabled && adBlockerLoadFailed" class="setting indented">
             <p class="discord-failure">Could not download or load uBlock Origin. Check your internet connection.</p>
             <button @click="retryAdBlocker">Retry</button>
+          </div>
+          <YTMDSetting
+            v-model="betterLyricsEnabled"
+            type="checkbox"
+            restart-required
+            name="Synced lyrics (Better Lyrics)"
+            description="Downloads and loads the Better Lyrics browser extension into the YouTube Music view. This is an unofficial, third-party extension not affiliated with YTMD."
+            @change="settingChangedRequiresRestart"
+          />
+          <div v-if="betterLyricsEnabled && betterLyricsLoadFailed" class="setting indented">
+            <p class="discord-failure">Could not download or load Better Lyrics. Check your internet connection.</p>
+            <button @click="retryBetterLyrics">Retry</button>
           </div>
           <YTMDSetting
             v-model="lastFMEnabled"

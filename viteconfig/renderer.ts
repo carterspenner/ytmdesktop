@@ -44,6 +44,13 @@ export default defineConfig({
     vue({
       features: {
         optionsAPI: false
+      },
+      template: {
+        compilerOptions: {
+          // Custom elements registered by electron-chrome-extensions' injectBrowserAction(),
+          // not Vue components - see TitleBar.vue.
+          isCustomElement: tag => tag.startsWith("browser-action")
+        }
       }
     })
   ],
