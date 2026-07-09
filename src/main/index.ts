@@ -239,7 +239,14 @@ function handleProtocol(url: string) {
 }
 
 // This will register the protocol in development, this is intentional and should stay this way for development purposes
-if (!app.isDefaultProtocolClient("ytmd")) {
+//
+// app.setAsDefaultProtocolClient()/isDefaultProtocolClient() are only supported on Windows and
+// macOS per Electron's own docs - Electron has no Linux implementation of either. This runs
+// unconditionally at module load, before app.whenReady() and everything else, so on Linux this was
+// throwing the same "Could not extract executable name from ''..." class of error as
+// setLoginItemSettings did, except even earlier - as an uncaught exception here, before anything
+// else in the app has run, this alone would prevent the app from opening at all.
+if (process.platform !== "linux" && !app.isDefaultProtocolClient("ytmd")) {
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
       log.info("Application set as default protcol client for 'ytmd'");
@@ -1780,7 +1787,17 @@ app.on("ready", async () => {
   ipcMain.on("settings:set", (event, key: string, value?: unknown) => {
     if (settingsWindow && event.sender !== settingsWindow.webContents) return;
 
-    store.set(key, value);
+    // Conf.set() throws (crashing the whole main process, since this isn't wrapped anywhere) if
+    // value is undefined - "Use `delete()` to clear values" instead. This isn't just a theoretical
+    // input: Settings.vue's settingsChanged() batches every setting's current ref value on every
+    // change, including ones a given user's store predates and never got backfilled (e.g. by a
+    // migration keyed to a version higher than this build actually reports), so undefined here is
+    // a real, reachable case rather than a programming error worth crashing over.
+    if (value === undefined) {
+      store.delete(key as keyof StoreSchema);
+    } else {
+      store.set(key, value);
+    }
   });
 
   ipcMain.handle("settings:get", (event, key: string) => {
