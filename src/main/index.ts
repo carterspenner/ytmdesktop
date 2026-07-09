@@ -239,7 +239,14 @@ function handleProtocol(url: string) {
 }
 
 // This will register the protocol in development, this is intentional and should stay this way for development purposes
-if (!app.isDefaultProtocolClient("ytmd")) {
+//
+// app.setAsDefaultProtocolClient()/isDefaultProtocolClient() are only supported on Windows and
+// macOS per Electron's own docs - Electron has no Linux implementation of either. This runs
+// unconditionally at module load, before app.whenReady() and everything else, so on Linux this was
+// throwing the same "Could not extract executable name from ''..." class of error as
+// setLoginItemSettings did, except even earlier - as an uncaught exception here, before anything
+// else in the app has run, this alone would prevent the app from opening at all.
+if (process.platform !== "linux" && !app.isDefaultProtocolClient("ytmd")) {
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
       log.info("Application set as default protcol client for 'ytmd'");
