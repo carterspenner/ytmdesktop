@@ -1787,7 +1787,17 @@ app.on("ready", async () => {
   ipcMain.on("settings:set", (event, key: string, value?: unknown) => {
     if (settingsWindow && event.sender !== settingsWindow.webContents) return;
 
-    store.set(key, value);
+    // Conf.set() throws (crashing the whole main process, since this isn't wrapped anywhere) if
+    // value is undefined - "Use `delete()` to clear values" instead. This isn't just a theoretical
+    // input: Settings.vue's settingsChanged() batches every setting's current ref value on every
+    // change, including ones a given user's store predates and never got backfilled (e.g. by a
+    // migration keyed to a version higher than this build actually reports), so undefined here is
+    // a real, reachable case rather than a programming error worth crashing over.
+    if (value === undefined) {
+      store.delete(key as keyof StoreSchema);
+    } else {
+      store.set(key, value);
+    }
   });
 
   ipcMain.handle("settings:get", (event, key: string) => {
