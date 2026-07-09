@@ -455,7 +455,13 @@ store.onDidAnyChange(async (newState, oldState) => {
   }
 
   // Setting start on boot in development tends to cause a blank electron executable to start on boot so let's never set that
-  if (process.env.NODE_ENV !== "development") {
+  //
+  // app.setLoginItemSettings() is only supported on Windows and macOS - Electron has no Linux
+  // implementation at all. Calling it there throws ("Could not extract executable name from '',
+  // please type a valid program name"), and since this fires from a store-change listener that
+  // runs during early startup (e.g. on migrations), that uncaught exception was preventing the app
+  // from opening at all on Linux.
+  if (process.env.NODE_ENV !== "development" && process.platform !== "linux") {
     app.setLoginItemSettings({
       openAtLogin: newState.general.startOnBoot
     });

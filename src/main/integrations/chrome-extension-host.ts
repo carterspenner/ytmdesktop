@@ -20,6 +20,30 @@ function resolveApiPolyfillPreloadPath(): string {
   return path.join(__dirname, "chrome-extension-api-polyfill", "preload.js");
 }
 
+// electron-chrome-extensions has no concept of a "tab" of its own - chrome.tabs.create() (used by
+// e.g. uBlock Origin's popup "Dashboard"/"Logger" links, and chrome.runtime.openOptionsPage()) is a
+// host hook it expects the app to implement; without it, ExtensionStore.createTab() throws
+// "createTab is not implemented", which from the caller's side just looks like nothing happened.
+// This app has no tabbed-browser UI to open a "tab" in, so each request just opens a plain,
+// independent window for the requested extension page (dashboard, options, etc).
+function createExtensionTab(session: Session, details: { url?: string }): Promise<[Electron.WebContents, Electron.BaseWindow]> {
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    webPreferences: {
+      session,
+      sandbox: true,
+      contextIsolation: true
+    }
+  });
+
+  if (details.url) {
+    win.loadURL(details.url);
+  }
+
+  return Promise.resolve([win.webContents, win]);
+}
+
 export function ensureChromeExtensionsSupport(session: Session): ElectronChromeExtensions {
   const existing = ElectronChromeExtensions.fromSession(session);
   if (existing) return existing;
@@ -30,7 +54,8 @@ export function ensureChromeExtensionsSupport(session: Session): ElectronChromeE
     // electron-chrome-extensions can't locate its own preload script automatically in our bundled +
     // asar-packaged build (see viteconfig/main.ts for why), so this points it at the copy we place
     // next to this file's own compiled output at build time.
-    modulePath: __dirname
+    modulePath: __dirname,
+    createTab: details => createExtensionTab(session, details)
   });
 
   // Required for <browser-action-list> (used by the main window's titlebar) to display extension
