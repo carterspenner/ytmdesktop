@@ -28,7 +28,14 @@ sha256sums=('SKIP' 'SKIP' 'SKIP')
 package() {
   install -dm755 "$pkgdir/usr/lib/$pkgname"
   cp -a "$srcdir/app/." "$pkgdir/usr/lib/$pkgname/"
-  chmod -R go-w "$pkgdir/usr/lib/$pkgname"
+  # cp -a preserves the source tree's own permissions, which end up owner-only (e.g. 700 dirs)
+  # depending on the umask wherever the Electron Forge output was produced - go-w alone only ever
+  # removes permissions, it can't add the group/other read/execute those files never had, leaving
+  # the installed app completely inaccessible to non-root users. go+rX adds read (and, via the
+  # capital X, execute only on directories or files already executable for someone - i.e. the main
+  # binary, not resource files that shouldn't be executable) for group/other; go-w then still
+  # explicitly strips any write bit that might have survived from the source.
+  chmod -R go+rX,go-w "$pkgdir/usr/lib/$pkgname"
 
   install -dm755 "$pkgdir/usr/bin"
   ln -s "/usr/lib/$pkgname/$pkgname" "$pkgdir/usr/bin/$pkgname"
