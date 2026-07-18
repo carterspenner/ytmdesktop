@@ -57,46 +57,23 @@ function hasPermission(name: string): boolean {
 //
 // Object.defineProperty() can replace a non-writable-but-configurable property, but chrome.alarms
 // has also been observed non-configurable ("Cannot redefine property: alarms"), so even that
-// fails. When it does, replaceProperty() falls back to wrapping the *parent* in a Proxy that
-// substitutes our value for this one key and transparently delegates everything else.
+// fails. An earlier version of this function fell back to replacing `chrome` itself (or its parent)
+// with a Proxy in that case - but a real device crash dump showed Chromium's own native extension
+// bindings code ("Failed to create API on Chrome object" in
+// extensions/renderer/native_extension_bindings_system.cc, a message also seen accompanying crashes
+// in other Chromium-based browsers) failing immediately after that Proxy was installed, followed by
+// the whole renderer dying with SIGTRAP. Chromium's C++ code apparently doesn't expect `chrome` to
+// become a Proxy mid-flight when it later tries to add more APIs to it.
 //
-// Critically, that Proxy must NOT wrap `target` itself: the JS engine enforces an invariant that a
-// Proxy's `get` trap cannot return anything other than a non-configurable data property's actual
-// value *when the proxy's own target has that property* - violating it throws "'get' on proxy:
-// property 'x' is a read-only and non-configurable data property on the proxy target but the proxy
-// did not return its actual value" on every subsequent read, exactly the non-configurable case this
-// exists to handle. Using a fresh, unfrozen object as the proxy's target sidesteps the invariant
-// entirely (it has no non-configurable properties of its own), while the trap still forwards every
-// other property read to the real `target` by reference.
-function replaceProperty(target: object, key: string, value: unknown, onLocked: (proxy: object) => void): void {
+// Non-configurable properties are left alone as a result: whatever depends on this polyfill (e.g.
+// uBlock's periodic alarm-based filter list updates) just doesn't get it in that context, which is
+// a far smaller problem than crashing the entire app.
+function replaceProperty(target: object, key: string, value: unknown): void {
   try {
     Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
-  } catch {
-    onLocked(
-      new Proxy(
-        {},
-        {
-          get(_placeholder, prop) {
-            // Deliberately not forwarding the proxy itself as the receiver here - a getter on
-            // `target` relying on `this` would otherwise run bound to the proxy instead of the
-            // real object.
-            return prop === key ? value : Reflect.get(target, prop, target);
-          },
-          has(_placeholder, prop) {
-            return prop === key || Reflect.has(target, prop);
-          }
-        }
-      )
-    );
+  } catch (error) {
+    console.error(`[chrome-extension-api-polyfill] chrome.${key} is locked down in this context and could not be replaced`, error);
   }
-}
-
-// `chrome` here is just a normal global property (typed locally below as `declare const chrome`
-// for convenience) - reassigning globalThis.chrome swaps what every subsequently-loaded script in
-// this context sees when it reads the bare `chrome` identifier, regardless of what property
-// descriptors existed on the object it used to point to.
-function replaceGlobalChrome(value: object): void {
-  (globalThis as unknown as { chrome: unknown }).chrome = value;
 }
 
 // Real chrome.storage.*/chrome.alarms methods support both a trailing callback and, when it's
@@ -199,7 +176,7 @@ function installAlarmsPolyfill(): void {
     }
   };
 
-  replaceProperty(chrome, "alarms", alarmsImpl, replaceGlobalChrome);
+  replaceProperty(chrome, "alarms", alarmsImpl);
 }
 
 function installStorageSyncPolyfill(): void {
@@ -268,11 +245,7 @@ function installStorageSyncPolyfill(): void {
     }
   };
 
-  // chrome.storage itself has not been observed locked down, but if it ever is, fall back one more
-  // level rather than assuming - same reasoning as the alarms case above.
-  replaceProperty(chrome.storage, "sync", syncImpl, proxiedStorage => {
-    replaceProperty(chrome, "storage", proxiedStorage, replaceGlobalChrome);
-  });
+  replaceProperty(chrome.storage, "sync", syncImpl);
 }
 
 // Each installer runs in its own try/catch: an uncaught error here aborts the entire preload
