@@ -87,7 +87,15 @@ export function addYtmViewTab(ytmView: BrowserView, mainWindow: BrowserWindow): 
   chromeExtensions.addTab(ytmView.webContents, mainWindow);
 }
 
-const CONTENT_SCRIPT_POLYFILL_FILENAME = "__ytmd_chrome_api_polyfill__.js";
+// Chrome (and Electron's extension loader) reject any file or directory anywhere in an extension's
+// package whose name starts with "_" - that prefix is reserved for system use (e.g. _locales) - so
+// this can't start with one, unlike files bundled inside our own app.
+const CONTENT_SCRIPT_POLYFILL_FILENAME = "ytmd-chrome-api-polyfill.js";
+// Previous name, which violated the rule above - Electron's loader was rejecting every extension
+// this had ever been injected into ("Filenames starting with '_' are reserved for use by the
+// system"). Cleaned up below for anyone who already has it sitting in a cached extension directory
+// from an earlier run, since the loader scans the whole tree, not just what manifest.json references.
+const LEGACY_CONTENT_SCRIPT_POLYFILL_FILENAME = "__ytmd_chrome_api_polyfill__.js";
 
 interface ExtensionManifest {
   content_scripts?: { js?: string[] }[];
@@ -120,10 +128,24 @@ export async function injectApiPolyfillContentScript(extensionDir: string): Prom
 
   let changed = false;
   for (const entry of contentScripts) {
-    if (!Array.isArray(entry.js) || entry.js[0] === CONTENT_SCRIPT_POLYFILL_FILENAME) continue;
-    entry.js.unshift(CONTENT_SCRIPT_POLYFILL_FILENAME);
-    changed = true;
+    if (!Array.isArray(entry.js)) continue;
+
+    const withoutLegacy = entry.js.filter(name => name !== LEGACY_CONTENT_SCRIPT_POLYFILL_FILENAME);
+    if (withoutLegacy.length !== entry.js.length) {
+      entry.js = withoutLegacy;
+      changed = true;
+    }
+
+    if (entry.js[0] !== CONTENT_SCRIPT_POLYFILL_FILENAME) {
+      entry.js.unshift(CONTENT_SCRIPT_POLYFILL_FILENAME);
+      changed = true;
+    }
   }
+
+  // Best-effort: leaving the stale file behind would still get this extension rejected by the
+  // loader even after manifest.json stops referencing it, since it scans the whole directory tree.
+  await fs.rm(path.join(extensionDir, LEGACY_CONTENT_SCRIPT_POLYFILL_FILENAME), { force: true }).catch((): undefined => undefined);
+
   if (!changed) return;
 
   try {
