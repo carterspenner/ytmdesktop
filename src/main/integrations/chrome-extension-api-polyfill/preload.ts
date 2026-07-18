@@ -99,6 +99,20 @@ function replaceGlobalChrome(value: object): void {
   (globalThis as unknown as { chrome: unknown }).chrome = value;
 }
 
+// Real chrome.storage.*/chrome.alarms methods support both a trailing callback and, when it's
+// omitted, a returned Promise (since Chrome 88) - extensions increasingly rely on the latter
+// (e.g. `await chrome.storage.sync.get(...)`). Calling the callback parameter directly without
+// checking for this crashes with "callback is not a function" the first time an extension omits
+// it, which is exactly what happened to Better Lyrics here. This wraps an async implementation to
+// support both calling conventions instead of assuming a callback is always given.
+function callbackOrPromise<T>(callback: ((result: T) => void) | undefined, work: () => Promise<T>): Promise<T> | undefined {
+  if (typeof callback === "function") {
+    work().then(callback);
+    return undefined;
+  }
+  return work();
+}
+
 function installAlarmsPolyfill(): void {
   // Only extensions that actually declare wanting chrome.alarms get it. Defining it unconditionally
   // for every extension in the session risks changing another extension's own feature detection
@@ -150,25 +164,33 @@ function installAlarmsPolyfill(): void {
   const alarmsImpl = {
     create,
     get(name: string, callback?: (alarm?: Alarm) => void) {
-      const timer = timers.get(name);
-      callback?.(timer ? { name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes } : undefined);
+      return callbackOrPromise(callback, async () => {
+        const timer = timers.get(name);
+        return timer ? { name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes } : undefined;
+      });
     },
     getAll(callback?: (alarms: Alarm[]) => void) {
-      callback?.(Array.from(timers.entries()).map(([name, timer]) => ({ name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes })));
+      return callbackOrPromise(callback, async () =>
+        Array.from(timers.entries()).map(([name, timer]) => ({ name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes }))
+      );
     },
     clear(name: string, callback?: (wasCleared: boolean) => void) {
-      const timer = timers.get(name);
-      if (timer) {
-        clearTimeout(timer.timeoutId);
-        timers.delete(name);
-      }
-      callback?.(!!timer);
+      return callbackOrPromise(callback, async () => {
+        const timer = timers.get(name);
+        if (timer) {
+          clearTimeout(timer.timeoutId);
+          timers.delete(name);
+        }
+        return !!timer;
+      });
     },
     clearAll(callback?: (wasCleared: boolean) => void) {
-      for (const timer of timers.values()) clearTimeout(timer.timeoutId);
-      const hadAny = timers.size > 0;
-      timers.clear();
-      callback?.(hadAny);
+      return callbackOrPromise(callback, async () => {
+        for (const timer of timers.values()) clearTimeout(timer.timeoutId);
+        const hadAny = timers.size > 0;
+        timers.clear();
+        return hadAny;
+      });
     },
     onAlarm: {
       addListener: (listener: (alarm: Alarm) => void) => listeners.add(listener),
@@ -192,12 +214,16 @@ function installStorageSyncPolyfill(): void {
   // extension itself stores in chrome.storage.local, regardless of what key names it happens to use.
   const NAMESPACE_KEY = "__chromeStorageSyncPolyfill__";
 
-  function readNamespace(callback: (data: Record<string, unknown>) => void): void {
-    local.get(NAMESPACE_KEY, result => callback((result?.[NAMESPACE_KEY] as Record<string, unknown>) || {}));
+  function readNamespace(): Promise<Record<string, unknown>> {
+    return new Promise(resolve => {
+      local.get(NAMESPACE_KEY, result => resolve((result?.[NAMESPACE_KEY] as Record<string, unknown>) || {}));
+    });
   }
 
-  function writeNamespace(data: Record<string, unknown>, callback?: () => void): void {
-    local.set({ [NAMESPACE_KEY]: data }, callback);
+  function writeNamespace(data: Record<string, unknown>): Promise<void> {
+    return new Promise(resolve => {
+      local.set({ [NAMESPACE_KEY]: data }, () => resolve());
+    });
   }
 
   function normalizeKeys(keys: unknown): string[] {
@@ -211,29 +237,34 @@ function installStorageSyncPolyfill(): void {
   // just chrome.storage.local's persistence under the hood - extensions get a working, persisted
   // store instead of a crash, they just don't get real multi-device sync (which isn't meaningful here).
   const syncImpl = {
-    get(keys: unknown, callback: (items: Record<string, unknown>) => void) {
-      readNamespace(all => {
-        if (keys == null) return callback(all);
+    get(keys: unknown, callback?: (items: Record<string, unknown>) => void) {
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
+        if (keys == null) return all;
         const defaults = typeof keys === "object" && !Array.isArray(keys) ? (keys as Record<string, unknown>) : {};
         const result: Record<string, unknown> = { ...defaults };
         for (const key of normalizeKeys(keys)) {
           if (key in all) result[key] = all[key];
         }
-        callback(result);
+        return result;
       });
     },
     set(items: Record<string, unknown>, callback?: () => void) {
-      readNamespace(all => writeNamespace({ ...all, ...items }, callback));
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
+        await writeNamespace({ ...all, ...items });
+      });
     },
     remove(keys: string | string[], callback?: () => void) {
-      readNamespace(all => {
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
         const next = { ...all };
         for (const key of normalizeKeys(keys)) delete next[key];
-        writeNamespace(next, callback);
+        await writeNamespace(next);
       });
     },
     clear(callback?: () => void) {
-      writeNamespace({}, callback);
+      return callbackOrPromise(callback, () => writeNamespace({}));
     }
   };
 
