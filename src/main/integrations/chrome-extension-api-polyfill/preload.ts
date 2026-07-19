@@ -257,11 +257,23 @@ function installStorageSyncPolyfill(): void {
 // Lyrics' extension ID specifically so it doesn't add noise to every other page/frame in the
 // session. Remove once the root cause is confirmed.
 const BETTER_LYRICS_EXTENSION_ID = "effdbpeggelllpfkjppbokhmmiinhlmg";
+
+// Summarizes a value's shape/size instead of its content - critical for values that might not
+// actually be a plain string (e.g. a Uint8Array that lost its type across a serialization
+// boundary and came back as a plain object with one entry per byte), which would otherwise blow
+// this diagnostic's single log line up to the value's full size instead of a few bytes.
+function summarizeValue(value: unknown): unknown {
+  if (typeof value === "string") return `string(${value.length})`;
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (value !== null && typeof value === "object") return `object(${Object.keys(value).length} keys)`;
+  return value;
+}
+
 function logStorageLocalDiagnostic(): void {
   if (chrome.runtime?.id !== BETTER_LYRICS_EXTENSION_ID) return;
   try {
     chrome.storage?.local.get(null, (all: Record<string, unknown>) => {
-      const summary = Object.fromEntries(Object.entries(all || {}).map(([key, value]) => [key, typeof value === "string" ? `string(${value.length})` : value]));
+      const summary = Object.fromEntries(Object.entries(all || {}).map(([key, value]) => [key, summarizeValue(value)]));
       const context = typeof location !== "undefined" ? location.href : "service-worker";
       console.log(`[ytmd-diag] chrome.storage.local at startup (context=${context}):`, JSON.stringify(summary));
     });
