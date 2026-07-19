@@ -39,7 +39,7 @@ type StorageArea = {
 declare const chrome: {
   alarms?: unknown;
   storage?: { local: StorageArea; sync?: StorageArea };
-  runtime?: { getManifest?: () => { permissions?: string[] } };
+  runtime?: { id?: string; getManifest?: () => { permissions?: string[] } };
 };
 
 function hasPermission(name: string): boolean {
@@ -248,6 +248,28 @@ function installStorageSyncPolyfill(): void {
   replaceProperty(chrome.storage, "sync", syncImpl);
 }
 
+// TEMPORARY diagnostic for a report that Better Lyrics' theme CSS doesn't survive a full app
+// restart even though chrome.storage.local visibly does write it out correctly (confirmed via a
+// user's log). This logs what chrome.storage.local actually contains at the earliest point each
+// of Better Lyrics' own execution contexts starts (its content script here, and its background
+// service worker via the session-wide registration of this same file) - both run this file before
+// Better Lyrics' own scripts, so this is the earliest possible observation point. Scoped to Better
+// Lyrics' extension ID specifically so it doesn't add noise to every other page/frame in the
+// session. Remove once the root cause is confirmed.
+const BETTER_LYRICS_EXTENSION_ID = "effdbpeggelllpfkjppbokhmmiinhlmg";
+function logStorageLocalDiagnostic(): void {
+  if (chrome.runtime?.id !== BETTER_LYRICS_EXTENSION_ID) return;
+  try {
+    chrome.storage?.local.get(null, (all: Record<string, unknown>) => {
+      const summary = Object.fromEntries(Object.entries(all || {}).map(([key, value]) => [key, typeof value === "string" ? `string(${value.length})` : value]));
+      const context = typeof location !== "undefined" ? location.href : "service-worker";
+      console.log(`[ytmd-diag] chrome.storage.local at startup (context=${context}):`, JSON.stringify(summary));
+    });
+  } catch (error) {
+    console.error("[ytmd-diag] failed to read chrome.storage.local", error);
+  }
+}
+
 // Each installer runs in its own try/catch: an uncaught error here aborts the entire preload
 // script (Electron logs "Unable to load preload script" and runs none of it), which would
 // silently take the other polyfill down with it.
@@ -261,6 +283,11 @@ if (typeof chrome !== "undefined") {
     installStorageSyncPolyfill();
   } catch (error) {
     console.error("[chrome-extension-api-polyfill] failed to install chrome.storage.sync", error);
+  }
+  try {
+    logStorageLocalDiagnostic();
+  } catch (error) {
+    console.error("[ytmd-diag] failed to run chrome.storage.local diagnostic", error);
   }
 }
 
