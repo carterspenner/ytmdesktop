@@ -73,6 +73,16 @@ export function ensureChromeExtensionsSupport(session: Session): ElectronChromeE
     filePath: resolveApiPolyfillPreloadPath()
   });
 
+  // electron-log's spyRendererConsole (see main/index.ts) only instruments regular webContents -
+  // an extension's Manifest V3 service worker isn't one, so without this, anything it logs
+  // (including errors) is completely invisible in this app's logs. Needed to debug what's actually
+  // happening inside Better Lyrics' service worker, which isn't otherwise observable at all.
+  const SERVICE_WORKER_LOG_LEVELS = ["verbose", "info", "warn", "error"] as const;
+  session.serviceWorkers.on("console-message", (_event, details) => {
+    const level = SERVICE_WORKER_LOG_LEVELS[details.level] ?? "info";
+    log[level](`[extension service worker v${details.versionId}] ${details.message} (${details.sourceUrl}:${details.lineNumber})`);
+  });
+
   return chromeExtensions;
 }
 
