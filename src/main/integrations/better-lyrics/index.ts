@@ -48,6 +48,21 @@ export default class BetterLyrics implements IIntegration {
       this.loadedExtensionId = extension.id;
       this.memoryStore?.set("betterLyricsLoadFailed", false);
       log.info(`Better Lyrics: loaded (${extension.version})`);
+
+      // Electron bug (electron/electron#41613, fixed in 42+ only - this app currently targets an
+      // earlier Electron): an extension's Manifest V3 service worker starts correctly the very
+      // first time it's ever loaded, but silently fails to auto-start on every subsequent app
+      // launch, because Electron mismanages the Chromium preference that's supposed to track
+      // whether the worker has started before. Whatever startup logic lives in Better Lyrics' own
+      // background service worker (confirmed, via a real device log, to include reapplying a
+      // previously saved theme - its chrome.storage.local data is intact after a restart, but
+      // nothing ever reads it without this) then never runs. Explicitly starting the worker here
+      // works around it until this app can move to Electron 42+.
+      try {
+        await this.ytmView.webContents.session.serviceWorkers.startWorkerForScope(`chrome-extension://${extension.id}/`);
+      } catch (error) {
+        log.warn("Better Lyrics: failed to explicitly start extension service worker", error);
+      }
     } catch (error) {
       log.error("Better Lyrics: failed to load", error);
       this.memoryStore?.set("betterLyricsLoadFailed", true);
