@@ -57,46 +57,37 @@ function hasPermission(name: string): boolean {
 //
 // Object.defineProperty() can replace a non-writable-but-configurable property, but chrome.alarms
 // has also been observed non-configurable ("Cannot redefine property: alarms"), so even that
-// fails. When it does, replaceProperty() falls back to wrapping the *parent* in a Proxy that
-// substitutes our value for this one key and transparently delegates everything else.
+// fails. An earlier version of this function fell back to replacing `chrome` itself (or its parent)
+// with a Proxy in that case - but a real device crash dump showed Chromium's own native extension
+// bindings code ("Failed to create API on Chrome object" in
+// extensions/renderer/native_extension_bindings_system.cc, a message also seen accompanying crashes
+// in other Chromium-based browsers) failing immediately after that Proxy was installed, followed by
+// the whole renderer dying with SIGTRAP. Chromium's C++ code apparently doesn't expect `chrome` to
+// become a Proxy mid-flight when it later tries to add more APIs to it.
 //
-// Critically, that Proxy must NOT wrap `target` itself: the JS engine enforces an invariant that a
-// Proxy's `get` trap cannot return anything other than a non-configurable data property's actual
-// value *when the proxy's own target has that property* - violating it throws "'get' on proxy:
-// property 'x' is a read-only and non-configurable data property on the proxy target but the proxy
-// did not return its actual value" on every subsequent read, exactly the non-configurable case this
-// exists to handle. Using a fresh, unfrozen object as the proxy's target sidesteps the invariant
-// entirely (it has no non-configurable properties of its own), while the trap still forwards every
-// other property read to the real `target` by reference.
-function replaceProperty(target: object, key: string, value: unknown, onLocked: (proxy: object) => void): void {
+// Non-configurable properties are left alone as a result: whatever depends on this polyfill (e.g.
+// uBlock's periodic alarm-based filter list updates) just doesn't get it in that context, which is
+// a far smaller problem than crashing the entire app.
+function replaceProperty(target: object, key: string, value: unknown): void {
   try {
     Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
-  } catch {
-    onLocked(
-      new Proxy(
-        {},
-        {
-          get(_placeholder, prop) {
-            // Deliberately not forwarding the proxy itself as the receiver here - a getter on
-            // `target` relying on `this` would otherwise run bound to the proxy instead of the
-            // real object.
-            return prop === key ? value : Reflect.get(target, prop, target);
-          },
-          has(_placeholder, prop) {
-            return prop === key || Reflect.has(target, prop);
-          }
-        }
-      )
-    );
+  } catch (error) {
+    console.error(`[chrome-extension-api-polyfill] chrome.${key} is locked down in this context and could not be replaced`, error);
   }
 }
 
-// `chrome` here is just a normal global property (typed locally below as `declare const chrome`
-// for convenience) - reassigning globalThis.chrome swaps what every subsequently-loaded script in
-// this context sees when it reads the bare `chrome` identifier, regardless of what property
-// descriptors existed on the object it used to point to.
-function replaceGlobalChrome(value: object): void {
-  (globalThis as unknown as { chrome: unknown }).chrome = value;
+// Real chrome.storage.*/chrome.alarms methods support both a trailing callback and, when it's
+// omitted, a returned Promise (since Chrome 88) - extensions increasingly rely on the latter
+// (e.g. `await chrome.storage.sync.get(...)`). Calling the callback parameter directly without
+// checking for this crashes with "callback is not a function" the first time an extension omits
+// it, which is exactly what happened to Better Lyrics here. This wraps an async implementation to
+// support both calling conventions instead of assuming a callback is always given.
+function callbackOrPromise<T>(callback: ((result: T) => void) | undefined, work: () => Promise<T>): Promise<T> | undefined {
+  if (typeof callback === "function") {
+    work().then(callback);
+    return undefined;
+  }
+  return work();
 }
 
 function installAlarmsPolyfill(): void {
@@ -150,25 +141,33 @@ function installAlarmsPolyfill(): void {
   const alarmsImpl = {
     create,
     get(name: string, callback?: (alarm?: Alarm) => void) {
-      const timer = timers.get(name);
-      callback?.(timer ? { name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes } : undefined);
+      return callbackOrPromise(callback, async () => {
+        const timer = timers.get(name);
+        return timer ? { name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes } : undefined;
+      });
     },
     getAll(callback?: (alarms: Alarm[]) => void) {
-      callback?.(Array.from(timers.entries()).map(([name, timer]) => ({ name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes })));
+      return callbackOrPromise(callback, async () =>
+        Array.from(timers.entries()).map(([name, timer]) => ({ name, scheduledTime: Date.now(), periodInMinutes: timer.periodInMinutes }))
+      );
     },
     clear(name: string, callback?: (wasCleared: boolean) => void) {
-      const timer = timers.get(name);
-      if (timer) {
-        clearTimeout(timer.timeoutId);
-        timers.delete(name);
-      }
-      callback?.(!!timer);
+      return callbackOrPromise(callback, async () => {
+        const timer = timers.get(name);
+        if (timer) {
+          clearTimeout(timer.timeoutId);
+          timers.delete(name);
+        }
+        return !!timer;
+      });
     },
     clearAll(callback?: (wasCleared: boolean) => void) {
-      for (const timer of timers.values()) clearTimeout(timer.timeoutId);
-      const hadAny = timers.size > 0;
-      timers.clear();
-      callback?.(hadAny);
+      return callbackOrPromise(callback, async () => {
+        for (const timer of timers.values()) clearTimeout(timer.timeoutId);
+        const hadAny = timers.size > 0;
+        timers.clear();
+        return hadAny;
+      });
     },
     onAlarm: {
       addListener: (listener: (alarm: Alarm) => void) => listeners.add(listener),
@@ -177,7 +176,7 @@ function installAlarmsPolyfill(): void {
     }
   };
 
-  replaceProperty(chrome, "alarms", alarmsImpl, replaceGlobalChrome);
+  replaceProperty(chrome, "alarms", alarmsImpl);
 }
 
 function installStorageSyncPolyfill(): void {
@@ -192,12 +191,16 @@ function installStorageSyncPolyfill(): void {
   // extension itself stores in chrome.storage.local, regardless of what key names it happens to use.
   const NAMESPACE_KEY = "__chromeStorageSyncPolyfill__";
 
-  function readNamespace(callback: (data: Record<string, unknown>) => void): void {
-    local.get(NAMESPACE_KEY, result => callback((result?.[NAMESPACE_KEY] as Record<string, unknown>) || {}));
+  function readNamespace(): Promise<Record<string, unknown>> {
+    return new Promise(resolve => {
+      local.get(NAMESPACE_KEY, result => resolve((result?.[NAMESPACE_KEY] as Record<string, unknown>) || {}));
+    });
   }
 
-  function writeNamespace(data: Record<string, unknown>, callback?: () => void): void {
-    local.set({ [NAMESPACE_KEY]: data }, callback);
+  function writeNamespace(data: Record<string, unknown>): Promise<void> {
+    return new Promise(resolve => {
+      local.set({ [NAMESPACE_KEY]: data }, () => resolve());
+    });
   }
 
   function normalizeKeys(keys: unknown): string[] {
@@ -211,37 +214,38 @@ function installStorageSyncPolyfill(): void {
   // just chrome.storage.local's persistence under the hood - extensions get a working, persisted
   // store instead of a crash, they just don't get real multi-device sync (which isn't meaningful here).
   const syncImpl = {
-    get(keys: unknown, callback: (items: Record<string, unknown>) => void) {
-      readNamespace(all => {
-        if (keys == null) return callback(all);
+    get(keys: unknown, callback?: (items: Record<string, unknown>) => void) {
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
+        if (keys == null) return all;
         const defaults = typeof keys === "object" && !Array.isArray(keys) ? (keys as Record<string, unknown>) : {};
         const result: Record<string, unknown> = { ...defaults };
         for (const key of normalizeKeys(keys)) {
           if (key in all) result[key] = all[key];
         }
-        callback(result);
+        return result;
       });
     },
     set(items: Record<string, unknown>, callback?: () => void) {
-      readNamespace(all => writeNamespace({ ...all, ...items }, callback));
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
+        await writeNamespace({ ...all, ...items });
+      });
     },
     remove(keys: string | string[], callback?: () => void) {
-      readNamespace(all => {
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
         const next = { ...all };
         for (const key of normalizeKeys(keys)) delete next[key];
-        writeNamespace(next, callback);
+        await writeNamespace(next);
       });
     },
     clear(callback?: () => void) {
-      writeNamespace({}, callback);
+      return callbackOrPromise(callback, () => writeNamespace({}));
     }
   };
 
-  // chrome.storage itself has not been observed locked down, but if it ever is, fall back one more
-  // level rather than assuming - same reasoning as the alarms case above.
-  replaceProperty(chrome.storage, "sync", syncImpl, proxiedStorage => {
-    replaceProperty(chrome, "storage", proxiedStorage, replaceGlobalChrome);
-  });
+  replaceProperty(chrome.storage, "sync", syncImpl);
 }
 
 // Each installer runs in its own try/catch: an uncaught error here aborts the entire preload
