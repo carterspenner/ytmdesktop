@@ -126,19 +126,19 @@ export async function injectApiPolyfillContentScript(extensionDir: string): Prom
   const contentScripts = manifest.content_scripts;
   if (!Array.isArray(contentScripts) || contentScripts.length === 0) return;
 
-  let changed = false;
+  let manifestChanged = false;
   for (const entry of contentScripts) {
     if (!Array.isArray(entry.js)) continue;
 
     const withoutLegacy = entry.js.filter(name => name !== LEGACY_CONTENT_SCRIPT_POLYFILL_FILENAME);
     if (withoutLegacy.length !== entry.js.length) {
       entry.js = withoutLegacy;
-      changed = true;
+      manifestChanged = true;
     }
 
     if (entry.js[0] !== CONTENT_SCRIPT_POLYFILL_FILENAME) {
       entry.js.unshift(CONTENT_SCRIPT_POLYFILL_FILENAME);
-      changed = true;
+      manifestChanged = true;
     }
   }
 
@@ -146,11 +146,16 @@ export async function injectApiPolyfillContentScript(extensionDir: string): Prom
   // loader even after manifest.json stops referencing it, since it scans the whole directory tree.
   await fs.rm(path.join(extensionDir, LEGACY_CONTENT_SCRIPT_POLYFILL_FILENAME), { force: true }).catch((): undefined => undefined);
 
-  if (!changed) return;
-
   try {
+    // Always re-copy, even when the manifest already referenced this filename from a previous
+    // run and doesn't need writing again: the file's own contents can change between app
+    // versions (bug fixes to the polyfill itself) even though its filename doesn't, and
+    // skipping the copy in that case would silently leave a stale, possibly-buggy copy in an
+    // extension's cache directory indefinitely.
     await fs.copyFile(resolveApiPolyfillPreloadPath(), path.join(extensionDir, CONTENT_SCRIPT_POLYFILL_FILENAME));
-    await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    if (manifestChanged) {
+      await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    }
   } catch (error) {
     log.warn("chrome-extension-host: failed to inject content-script polyfill", error);
   }
