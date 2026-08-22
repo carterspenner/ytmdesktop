@@ -51,6 +51,7 @@ declare global {
       handleUpdateDownloaded(callback: (event: Electron.IpcRendererEvent) => void);
       isAppUpdateAvailable(): Promise<boolean>;
       isAppUpdateDownloaded(): Promise<boolean>;
+      resetAdBlockerData(): Promise<void>;
     };
   }
 

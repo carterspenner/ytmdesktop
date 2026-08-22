@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld("ytmd", {
   handleWindowEvents: (callback: (event: Electron.IpcRendererEvent, args: WindowsEventArguments) => void) =>
     ipcRenderer.on("settingsWindow:stateChanged", callback),
   getAppVersion: async (): Promise<string> => await ipcRenderer.invoke("app:getVersion"),
+  resetAdBlockerData: async (): Promise<void> => await ipcRenderer.invoke("adBlocker:resetData"),
   checkForUpdates: () => ipcRenderer.send("app:checkForUpdates"),
   handleCheckingForUpdate: (callback: (event: Electron.IpcRendererEvent) => void) => ipcRenderer.on("app:checkingForUpdate", callback),
   handleUpdateAvailable: (callback: (event: Electron.IpcRendererEvent) => void) => ipcRenderer.on("app:updateAvailable", callback),
