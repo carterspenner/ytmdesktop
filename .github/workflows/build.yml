@@ -83,13 +83,18 @@ jobs:
           # Maker output filenames don't already encode the OS/arch, so two matrix jobs can
           # produce the exact same filename - stage renamed copies to guarantee every asset
           # uploaded to the shared ci-latest release is unique instead of one clobbering another.
+          # Spaces are also stripped: GitHub normalizes spaces in stored asset names, which makes
+          # `gh release upload --clobber`'s own "does this already exist" check miss the match
+          # against a previous run's asset and fall through to a raw 422 from the upload endpoint
+          # instead of replacing it (https://github.com/cli/cli/issues/7024).
           mkdir -p release-assets
           shopt -s nullglob
           for f in out/make/squirrel.windows/${{ matrix.arch }}/*.exe \
                    out/make/deb/${{ matrix.arch }}/*.deb \
                    out/make/rpm/${{ matrix.arch }}/*.rpm \
                    out/make/zip/darwin/${{ matrix.arch }}/*.zip; do
-            cp "$f" "release-assets/ytmd-${{ matrix.os.name }}-${{ matrix.arch }}-$(basename "$f")"
+            clean_name=$(basename "$f" | tr ' ' '-')
+            cp "$f" "release-assets/ytmd-${{ matrix.os.name }}-${{ matrix.arch }}-$clean_name"
           done
 
           if [ -z "$(ls -A release-assets)" ]; then
@@ -97,7 +102,13 @@ jobs:
             exit 0
           fi
 
-          gh release upload ci-latest release-assets/* --clobber
+          # Explicit delete-then-upload rather than relying on --clobber's own matching, which
+          # is unreliable even without the space issue above (see cli/cli#7178, cli/cli#4863).
+          for f in release-assets/*; do
+            name=$(basename "$f")
+            gh release delete-asset ci-latest "$name" -y 2>/dev/null || true
+            gh release upload ci-latest "$f"
+          done
 
   build-arch:
     # There is no maintained Electron Forge maker for pacman packages, so this job packages
@@ -189,10 +200,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # See the equivalent step in the build job above for why filenames are staged with
+          # spaces stripped and why this deletes-then-uploads rather than using --clobber.
           mkdir -p release-assets
           shopt -s nullglob
           for f in packaging/arch/*.pkg.tar.zst; do
-            cp "$f" "release-assets/ytmd-archlinux-${{ matrix.arch.node }}-$(basename "$f")"
+            clean_name=$(basename "$f" | tr ' ' '-')
+            cp "$f" "release-assets/ytmd-archlinux-${{ matrix.arch.node }}-$clean_name"
           done
 
           if [ -z "$(ls -A release-assets)" ]; then
@@ -200,4 +214,8 @@ jobs:
             exit 0
           fi
 
-          gh release upload ci-latest release-assets/* --clobber
+          for f in release-assets/*; do
+            name=$(basename "$f")
+            gh release delete-asset ci-latest "$name" -y 2>/dev/null || true
+            gh release upload ci-latest "$f"
+          done
