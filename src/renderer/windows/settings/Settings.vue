@@ -223,6 +223,11 @@ async function retryAdBlocker() {
   await settingsChanged();
 }
 
+async function resetAdBlockerData() {
+  await window.ytmd.resetAdBlockerData();
+  requiresRestart.value = true;
+}
+
 async function retryBetterLyrics() {
   requiresRestart.value = true;
   betterLyricsEnabled.value = false;
@@ -444,6 +449,10 @@ window.ytmd.handleUpdateDownloaded(() => {
           <div v-if="adBlockEnabled && adBlockerLoadFailed" class="setting indented">
             <p class="discord-failure">Could not download or load uBlock Origin. Check your internet connection.</p>
             <button @click="retryAdBlocker">Retry</button>
+          </div>
+          <div class="setting indented">
+            <p class="muted-description">Experiencing crashes or high memory use with the ad blocker? Reset its stored filter list data.</p>
+            <button @click="resetAdBlockerData">Reset ad blocker data</button>
           </div>
           <YTMDSetting
             v-model="betterLyricsEnabled"
@@ -891,7 +900,8 @@ window.ytmd.handleUpdateDownloaded(() => {
   padding: 4px;
 }
 
-.discord-failure {
+.discord-failure,
+.muted-description {
   margin: 0;
   color: #969696;
 }

@@ -1839,6 +1839,12 @@ app.on("ready", async () => {
     return safeStorage.encryptString(value).toString("hex");
   });
 
+  ipcMain.handle("adBlocker:resetData", async event => {
+    if (event.sender !== settingsWindow.webContents) return;
+
+    await adBlocker.resetExtensionData();
+  });
+
   // Handle app ipc
   ipcMain.handle("app:getVersion", event => {
     if (event.sender !== settingsWindow.webContents) return;

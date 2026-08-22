@@ -1,5 +1,7 @@
 import { app, BrowserView, BrowserWindow, WebContents, webContents } from "electron";
 import log from "electron-log";
+import fsPromises from "fs/promises";
+import path from "path";
 
 import IIntegration from "../integration";
 import MemoryStore from "../../memory-store";
@@ -104,6 +106,37 @@ export default class AdBlocker implements IIntegration {
 
     this.loadedExtensionId = null;
     this.memoryStore?.set("adBlockerLoadFailed", false);
+  }
+
+  // uBlock Origin's own persisted data (filter list subscriptions, compiled filter cache, settings)
+  // lives in the ytmView session's on-disk extension storage, entirely separate from the extension
+  // code cached by ensureUBlockOriginExtension(). That data has, in practice, occasionally grown
+  // into a state that makes uBlock's filter compiler blow up memory usage on startup (confirmed via
+  // device logs and a crash dump - not something this app's code produces or can prevent), so this
+  // gives users a way to reset it without having to find and delete the folder by hand.
+  public async resetExtensionData(): Promise<void> {
+    if (!this.ytmView) return;
+
+    const wasEnabled = this.isEnabled;
+    this.disable();
+
+    try {
+      const extensionPath = await ensureUBlockOriginExtension();
+      // Electron derives an unpacked extension's id deterministically from its path, so loading it
+      // here (and immediately unloading again) just resolves the same id enable() would use, without
+      // actually leaving the extension active while its storage directory gets deleted out from
+      // under it.
+      const extension = await this.ytmView.webContents.session.extensions.loadExtension(extensionPath);
+      this.ytmView.webContents.session.extensions.removeExtension(extension.id);
+
+      const partitionName = app.isPackaged ? "ytmview" : "ytmview-dev";
+      const storageDir = path.join(app.getPath("userData"), "Partitions", partitionName, "Local Extension Settings", extension.id);
+      await fsPromises.rm(storageDir, { recursive: true, force: true }).catch((): undefined => undefined);
+
+      log.info("Ad blocker: reset uBlock Origin's stored data");
+    } finally {
+      if (wasEnabled) await this.enable();
+    }
   }
 
   public getYTMScripts(): { name: string; script: string }[] {
