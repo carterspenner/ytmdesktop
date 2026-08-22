@@ -5,8 +5,33 @@ on:
   - push
   - pull_request
 
+# actions/upload-artifact counts against the repo's (limited) Actions storage quota and
+# accumulates run after run. Build output is instead uploaded as assets on a single rolling
+# "ci-latest" pre-release, which doesn't count against that quota and never grows - each run's
+# assets just replace the previous ones.
+permissions:
+  contents: write
+
 jobs:
+  ensure-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure the ci-latest release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gh release create needs a repo to target and won't infer one without a checkout.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view ci-latest >/dev/null 2>&1 && exit 0
+          # Two runs racing to create this for the first time both land here; whichever loses
+          # the race gets a "release already exists" error from gh, which is fine.
+          gh release create ci-latest \
+            --title "Latest CI build" \
+            --notes "Automatically replaced by the most recent CI run on any branch/PR - this is build output for testing, not an official release. See the Releases page for versioned releases." \
+            --prerelease || gh release view ci-latest >/dev/null 2>&1
+
   build:
+    needs: ensure-release
     strategy:
       matrix:
         os: [
@@ -44,21 +69,53 @@ jobs:
           YTMD_UPDATE_FEED_REPOSITORY: ${{ vars.YTMD_UPDATE_FEED_REPOSITORY }}
         run: yarn make --arch ${{ matrix.arch }}
 
-      - name: Upload artifacts (${{ matrix.arch }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.os.name }}-${{ matrix.arch }}
-          path: |
-            out/make/squirrel.windows/${{ matrix.arch }}/*.exe
-            out/make/deb/${{ matrix.arch }}/*.deb
-            out/make/rpm/${{ matrix.arch }}/*.rpm
-            out/make/zip/darwin/${{ matrix.arch }}/*.zip
+      - name: Upload build to the ci-latest release (${{ matrix.arch }})
+        # A fork PR's GITHUB_TOKEN is read-only against this repo regardless of the
+        # `permissions:` above - that's a hard GitHub restriction, not something this workflow
+        # can grant its way around. Skipping the upload there still lets the build/test steps
+        # above report real pass/fail status for the PR; only the release asset is skipped.
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Maker output filenames don't already encode the OS/arch, so two matrix jobs can
+          # produce the exact same filename - stage renamed copies to guarantee every asset
+          # uploaded to the shared ci-latest release is unique instead of one clobbering another.
+          # Spaces are also stripped: GitHub normalizes spaces in stored asset names, which makes
+          # `gh release upload --clobber`'s own "does this already exist" check miss the match
+          # against a previous run's asset and fall through to a raw 422 from the upload endpoint
+          # instead of replacing it (https://github.com/cli/cli/issues/7024).
+          mkdir -p release-assets
+          shopt -s nullglob
+          for f in out/make/squirrel.windows/${{ matrix.arch }}/*.exe \
+                   out/make/deb/${{ matrix.arch }}/*.deb \
+                   out/make/rpm/${{ matrix.arch }}/*.rpm \
+                   out/make/zip/darwin/${{ matrix.arch }}/*.zip; do
+            clean_name=$(basename "$f" | tr ' ' '-')
+            cp "$f" "release-assets/ytmd-${{ matrix.os.name }}-${{ matrix.arch }}-$clean_name"
+          done
+
+          if [ -z "$(ls -A release-assets)" ]; then
+            echo "No build output matched for ${{ matrix.os.name }}/${{ matrix.arch }} - nothing to upload"
+            exit 0
+          fi
+
+          # Explicit delete-then-upload rather than relying on --clobber's own matching, which
+          # is unreliable even without the space issue above (see cli/cli#7178, cli/cli#4863).
+          for f in release-assets/*; do
+            name=$(basename "$f")
+            gh release delete-asset ci-latest "$name" -y 2>/dev/null || true
+            gh release upload ci-latest "$f"
+          done
 
   build-arch:
     # There is no maintained Electron Forge maker for pacman packages, so this job packages
     # the app with `electron-forge package` (skipping the deb/rpm/squirrel/zip makers) and
     # builds a .pkg.tar.zst itself with makepkg inside an Arch Linux container, using
     # packaging/arch/PKGBUILD.
+    needs: ensure-release
     strategy:
       matrix:
         arch: [
@@ -75,9 +132,11 @@ jobs:
       # Arch's own nodejs package tracks current (Node 26 at the time of writing), which the
       # Vite plugin's packaging process-exit handling doesn't seem to like - it was exiting
       # 0 mid-way through extracting the Electron zip, before out/ ever got written. Pinning
-      # the same Node version the other build jobs use avoids that entirely.
+      # the same Node version the other build jobs use avoids that entirely. github-cli is for
+      # uploading the packaged build to the ci-latest release below - the base container doesn't
+      # include it.
       - name: Install build dependencies
-        run: pacman -Syu --noconfirm --needed base-devel git
+        run: pacman -Syu --noconfirm --needed base-devel git github-cli
 
       - name: Github checkout
         uses: actions/checkout@v4
@@ -132,8 +191,31 @@ jobs:
           # makepkg's own-machine-architecture check is a false positive here.
           su builder -c "YTMD_PKGVER=$YTMD_PKGVER YTMD_PKGARCH=${{ matrix.arch.pacman }} makepkg -f --noconfirm --nodeps --ignorearch"
 
-      - name: Upload artifacts (${{ matrix.arch.node }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-archlinux-${{ matrix.arch.node }}
-          path: packaging/arch/*.pkg.tar.zst
+      - name: Upload build to the ci-latest release (${{ matrix.arch.node }})
+        # See the equivalent step in the build job above - fork PRs can't get a writable token
+        # here no matter what this workflow requests, so the upload is skipped rather than
+        # failing the job over something outside this workflow's control.
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # See the equivalent step in the build job above for why filenames are staged with
+          # spaces stripped and why this deletes-then-uploads rather than using --clobber.
+          mkdir -p release-assets
+          shopt -s nullglob
+          for f in packaging/arch/*.pkg.tar.zst; do
+            clean_name=$(basename "$f" | tr ' ' '-')
+            cp "$f" "release-assets/ytmd-archlinux-${{ matrix.arch.node }}-$clean_name"
+          done
+
+          if [ -z "$(ls -A release-assets)" ]; then
+            echo "No build output matched for archlinux/${{ matrix.arch.node }} - nothing to upload"
+            exit 0
+          fi
+
+          for f in release-assets/*; do
+            name=$(basename "$f")
+            gh release delete-asset ci-latest "$name" -y 2>/dev/null || true
+            gh release upload ci-latest "$f"
+          done
