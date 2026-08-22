@@ -134,6 +134,24 @@ async function pruneOldVersions(cacheDir: string, keepDir: string): Promise<void
   }
 }
 
+// extract-zip creates symlinks from a downloaded zip without validating their target (no fixed
+// release exists - https://github.com/advisories/GHSA-jmr9-qjv8-65gv), so a malicious zip could
+// place a symlink inside the extraction dir pointing anywhere else on disk. Real extension
+// packages have no legitimate reason to contain symlinks, so treat any as a sign of tampering
+// rather than trying to validate individual targets.
+async function assertNoSymlinks(dir: string): Promise<void> {
+  const entries = await fsPromises.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Refusing to use extracted extension: unexpected symlink at ${entryPath}`);
+    }
+    if (entry.isDirectory()) {
+      await assertNoSymlinks(entryPath);
+    }
+  }
+}
+
 // Different extensions' release zips are packaged differently - some (e.g. uBlock Origin's chromium
 // build) nest the extension inside a wrapper folder, others zip the extension's own contents directly
 // at the archive root. Rather than hardcoding either layout, find manifest.json wherever it landed.
@@ -217,6 +235,13 @@ async function downloadAndExtract(config: ExtensionProvisionerConfig, cacheDir: 
   await downloadFile(asset.browser_download_url, zipPath);
   const sha256 = await sha256File(zipPath);
   await extractZip(zipPath, { dir: versionDir });
+
+  try {
+    await assertNoSymlinks(versionDir);
+  } catch (error) {
+    await fsPromises.rm(versionDir, { recursive: true, force: true }).catch((): undefined => undefined);
+    throw error;
+  }
 
   const manifestDir = await locateManifestDir(versionDir);
 
