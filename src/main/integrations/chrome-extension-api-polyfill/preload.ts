@@ -13,9 +13,9 @@
 //    script never reaches, and Better Lyrics needs chrome.storage.sync there specifically
 //
 // Both polyfills below are written defensively as a result: alarms is only installed for
-// extensions that actually declare the permission, and storage.sync is its own isolated store
-// rather than a raw alias to storage.local, so this can never collide with or corrupt an unrelated
-// extension's own storage.local data.
+// extensions that actually declare the permission, and storage.sync is a passthrough to
+// storage.local (matching what electron-chrome-extensions already does for extension pages)
+// with the addition of firing onChanged events with areaName "sync".
 
 interface AlarmInfo {
   when?: number;
@@ -201,20 +201,40 @@ function installStorageSyncPolyfill(): void {
   if (!chrome.storage) return;
 
   const local = chrome.storage.local;
-  // All sync-polyfill data lives nested under this single local storage key, rather than sharing
-  // local's top-level keyspace directly - so this can't collide with or overwrite whatever the
-  // extension itself stores in chrome.storage.local, regardless of what key names it happens to use.
-  const NAMESPACE_KEY = "__chromeStorageSyncPolyfill__";
 
-  function readNamespace(): Promise<Record<string, unknown>> {
+  // electron-chrome-extensions' own preload sets `sync: local` (a direct alias) for extension
+  // pages (popup, options, background), but that only runs in the main world of chrome-extension://
+  // URLs. Content scripts (which run in an isolated world on the host page) get Electron's broken
+  // stub instead. This polyfill bridges the gap by making sync a passthrough to local in every
+  // context, matching what the library already does for extension pages. Using the same backing
+  // store means data written by the popup (via the library's alias) is visible to the content
+  // script (via this polyfill) and vice versa.
+  //
+  // The only addition over a raw alias is firing onChanged events with areaName "sync" after
+  // writes, so extensions that distinguish storage areas in their listeners (as Better Lyrics does)
+  // see the events they expect.
+
+  function localGet(keys: unknown): Promise<Record<string, unknown>> {
     return new Promise(resolve => {
-      local.get(NAMESPACE_KEY, result => resolve((result?.[NAMESPACE_KEY] as Record<string, unknown>) || {}));
+      local.get(keys as string[], result => resolve(result || {}));
     });
   }
 
-  function writeNamespace(data: Record<string, unknown>): Promise<void> {
+  function localSet(items: Record<string, unknown>): Promise<void> {
     return new Promise(resolve => {
-      local.set({ [NAMESPACE_KEY]: data }, () => resolve());
+      local.set(items, () => resolve());
+    });
+  }
+
+  function localRemove(keys: string[]): Promise<void> {
+    return new Promise(resolve => {
+      local.remove(keys, () => resolve());
+    });
+  }
+
+  function localClear(): Promise<void> {
+    return new Promise(resolve => {
+      local.clear(() => resolve());
     });
   }
 
@@ -225,10 +245,10 @@ function installStorageSyncPolyfill(): void {
     return Object.keys(keys as Record<string, unknown>);
   }
 
-  // Intercept chrome.storage.onChanged so we can:
-  // 1. Fire synthetic events with areaName "sync" when our polyfill writes data
-  // 2. Suppress the native "local" event for our internal NAMESPACE_KEY, which would otherwise
-  //    confuse extensions (Better Lyrics checks for changes.customCSS but sees changes.__chromeStorageSyncPolyfill__ instead)
+  // Track onChanged listeners so we can fire synthetic "sync" area events after writes. Native
+  // onChanged events from the underlying local.set/remove/clear still fire with areaName "local"
+  // (which is correct — the data IS in local storage). The synthetic "sync" events are additional,
+  // for extensions whose listeners branch on `area === "sync"`.
   const syncOnChangedListeners = new Set<OnChangedListener>();
   const nativeOnChanged = chrome.storage.onChanged;
   if (nativeOnChanged) {
@@ -239,27 +259,14 @@ function installStorageSyncPolyfill(): void {
 
     nativeOnChanged.addListener = (listener: OnChangedListener) => {
       syncOnChangedListeners.add(listener);
-      const wrapper: OnChangedListener = (changes, areaName) => {
-        if (areaName === "local" && NAMESPACE_KEY in changes) {
-          const filtered = { ...changes };
-          delete filtered[NAMESPACE_KEY];
-          if (Object.keys(filtered).length === 0) return;
-          listener(filtered, areaName);
-          return;
-        }
-        listener(changes, areaName);
-      };
-      wrappedListeners.set(listener, wrapper);
-      nativeAddListener(wrapper);
+      wrappedListeners.set(listener, listener);
+      nativeAddListener(listener);
     };
 
     nativeOnChanged.removeListener = (listener: OnChangedListener) => {
       syncOnChangedListeners.delete(listener);
-      const wrapper = wrappedListeners.get(listener);
-      if (wrapper) {
-        wrappedListeners.delete(listener);
-        nativeRemoveListener(wrapper);
-      }
+      wrappedListeners.delete(listener);
+      nativeRemoveListener(listener);
     };
 
     if (nativeOnChanged.hasListener) {
@@ -280,52 +287,42 @@ function installStorageSyncPolyfill(): void {
 
   const syncImpl = {
     get(keys: unknown, callback?: (items: Record<string, unknown>) => void) {
-      return callbackOrPromise(callback, async () => {
-        const all = await readNamespace();
-        if (keys == null) return all;
-        const defaults = typeof keys === "object" && !Array.isArray(keys) ? (keys as Record<string, unknown>) : {};
-        const result: Record<string, unknown> = { ...defaults };
-        for (const key of normalizeKeys(keys)) {
-          if (key in all) result[key] = all[key];
-        }
-        return result;
-      });
+      return callbackOrPromise(callback, () => localGet(keys));
     },
     set(items: Record<string, unknown>, callback?: () => void) {
       return callbackOrPromise(callback, async () => {
-        const all = await readNamespace();
+        const old = await localGet(Object.keys(items));
         const changes: StorageChanges = {};
         for (const [key, newValue] of Object.entries(items)) {
           changes[key] = { newValue };
-          if (key in all) changes[key].oldValue = all[key];
+          if (key in old) changes[key].oldValue = old[key];
         }
-        await writeNamespace({ ...all, ...items });
+        await localSet(items);
         fireSyncChanges(changes);
       });
     },
     remove(keys: string | string[], callback?: () => void) {
       return callbackOrPromise(callback, async () => {
-        const all = await readNamespace();
-        const next = { ...all };
+        const keyList = normalizeKeys(keys);
+        const old = await localGet(keyList);
         const changes: StorageChanges = {};
-        for (const key of normalizeKeys(keys)) {
-          if (key in all) {
-            changes[key] = { oldValue: all[key] };
+        for (const key of keyList) {
+          if (key in old) {
+            changes[key] = { oldValue: old[key] };
           }
-          delete next[key];
         }
-        await writeNamespace(next);
+        await localRemove(keyList);
         fireSyncChanges(changes);
       });
     },
     clear(callback?: () => void) {
       return callbackOrPromise(callback, async () => {
-        const all = await readNamespace();
+        const all = await localGet(null);
         const changes: StorageChanges = {};
         for (const [key, value] of Object.entries(all)) {
           changes[key] = { oldValue: value };
         }
-        await writeNamespace({});
+        await localClear();
         fireSyncChanges(changes);
       });
     }

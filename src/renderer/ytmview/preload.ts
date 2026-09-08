@@ -225,20 +225,32 @@ window.addEventListener("load", async () => {
   }
 
   await new Promise<void>(resolve => {
+    const startTime = Date.now();
     const interval = setInterval(async () => {
-      const hooked = (
-        await webFrame.executeJavaScript(`
-        (function() {
-          if (window.__YTMD_HOOK__) {
-            return true;
-          }
-          
-          return false;
-        })
-      `)
-      )();
+      try {
+        const hooked = (
+          await webFrame.executeJavaScript(`
+          (function() {
+            if (window.__YTMD_HOOK__) {
+              return true;
+            }
 
-      if (hooked) {
+            return false;
+          })
+        `)
+        )();
+
+        if (hooked) {
+          clearInterval(interval);
+          resolve();
+          return;
+        }
+      } catch {
+        // executeJavaScript can throw if the page context isn't ready yet
+      }
+
+      if (Date.now() - startTime > 30 * 1000) {
+        console.warn("[ytmView preload] Timed out waiting for __YTMD_HOOK__, continuing anyway");
         clearInterval(interval);
         resolve();
       }
@@ -251,32 +263,52 @@ window.addEventListener("load", async () => {
   materialSymbols.onload = () => {
     materialSymbolsLoaded = true;
   };
+  materialSymbols.onerror = () => {
+    materialSymbolsLoaded = true;
+  };
   document.head.appendChild(materialSymbols);
 
   await new Promise<void>(resolve => {
+    const startTime = Date.now();
     const interval = setInterval(async () => {
-      const playerApiReady: boolean = (
-        await webFrame.executeJavaScript(`
-          (function() {
-            return document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.isReady();
-          })
-        `)
-      )();
+      try {
+        const playerApiReady: boolean = (
+          await webFrame.executeJavaScript(`
+            (function() {
+              var el = document.querySelector("ytmusic-app-layout>ytmusic-player-bar");
+              return el && el.playerApi && el.playerApi.isReady();
+            })
+          `)
+        )();
 
-      if (materialSymbolsLoaded && playerApiReady) {
+        if (materialSymbolsLoaded && playerApiReady) {
+          clearInterval(interval);
+          resolve();
+          return;
+        }
+      } catch {
+        // executeJavaScript can throw if the page context isn't ready yet
+      }
+
+      if (Date.now() - startTime > 30 * 1000) {
+        console.warn("[ytmView preload] Timed out waiting for playerApi.isReady(), continuing anyway");
         clearInterval(interval);
         resolve();
       }
     }, 250);
   });
 
-  createStyleSheet();
-  createNavigationMenuArrows();
-  createKeyboardNavigation();
-  await createAdditionalPlayerBarControls();
-  await hideChromecastButton();
-  await hookPlayerApiEvents();
-  overrideHistoryButtonDisplay();
+  try {
+    createStyleSheet();
+    createNavigationMenuArrows();
+    createKeyboardNavigation();
+    await createAdditionalPlayerBarControls();
+    await hideChromecastButton();
+    await hookPlayerApiEvents();
+    overrideHistoryButtonDisplay();
+  } catch (e) {
+    console.error("[ytmView preload] Error during post-load setup (app will still load):", e);
+  }
 
   const integrationScripts: { [integrationName: string]: { [scriptName: string]: string } } = await ipcRenderer.invoke("ytmView:getIntegrationScripts");
 
