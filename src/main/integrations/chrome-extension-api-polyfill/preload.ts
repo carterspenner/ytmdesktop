@@ -84,7 +84,10 @@ function replaceProperty(target: object, key: string, value: unknown): void {
 // support both calling conventions instead of assuming a callback is always given.
 function callbackOrPromise<T>(callback: ((result: T) => void) | undefined, work: () => Promise<T>): Promise<T> | undefined {
   if (typeof callback === "function") {
-    work().then(callback);
+    work().then(
+      result => callback(result),
+      error => console.error("[chrome-extension-api-polyfill]", error)
+    );
     return undefined;
   }
   return work();
