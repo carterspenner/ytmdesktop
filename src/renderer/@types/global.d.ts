@@ -13,8 +13,8 @@ declare global {
       store: Store<StoreSchema>;
       memoryStore: MemoryStore<MemoryStoreSchema>;
       safeStorage: {
-        decryptString(value: string): string;
-        encryptString(value: string): Buffer;
+        decryptString(value: string): Promise<string>;
+        encryptString(value: string): Promise<string>;
       };
       openSettingsWindow(): void;
       restartApplication(): void;

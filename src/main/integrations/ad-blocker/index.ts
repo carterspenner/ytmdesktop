@@ -16,7 +16,7 @@ export default class AdBlocker implements IIntegration {
   private isEnabled = false;
   private loadedExtensionId: string | null = null;
   private preparePromise: Promise<string> | null = null;
-  private backgroundPageWatcherAttached = false;
+  private backgroundPageWatcher: ((_event: Electron.Event, contents: WebContents) => void) | null = null;
 
   public provide(memoryStore: MemoryStore<MemoryStoreSchema>, ytmView: BrowserView, mainWindow: BrowserWindow): void {
     this.memoryStore = memoryStore;
@@ -64,8 +64,7 @@ export default class AdBlocker implements IIntegration {
   // uBlock Origin's background page normally runs invisibly; the only failure mode worth
   // surfacing outside a devtools window is its render process dying outright.
   private watchBackgroundPage(): void {
-    if (this.backgroundPageWatcherAttached) return;
-    this.backgroundPageWatcherAttached = true;
+    if (this.backgroundPageWatcher) return;
 
     const attach = (contents: WebContents) => {
       if (contents.getType() !== "backgroundPage") return;
@@ -75,8 +74,15 @@ export default class AdBlocker implements IIntegration {
       });
     };
 
-    app.on("web-contents-created", (_event, contents) => attach(contents));
+    this.backgroundPageWatcher = (_event, contents) => attach(contents);
+    app.on("web-contents-created", this.backgroundPageWatcher);
     for (const contents of webContents.getAllWebContents()) attach(contents);
+  }
+
+  private unwatchBackgroundPage(): void {
+    if (!this.backgroundPageWatcher) return;
+    app.removeListener("web-contents-created", this.backgroundPageWatcher);
+    this.backgroundPageWatcher = null;
   }
 
   // Opens uBlock Origin's own background page devtools, so its actual console output (filter list
@@ -96,6 +102,7 @@ export default class AdBlocker implements IIntegration {
 
   public disable(): void {
     this.isEnabled = false;
+    this.unwatchBackgroundPage();
     if (!this.ytmView || !this.loadedExtensionId) return;
 
     try {

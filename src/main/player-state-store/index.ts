@@ -381,8 +381,8 @@ class PlayerStateStore {
     muted: boolean | null,
     adPlaying: boolean | null
   ) {
-    const queueItems = queueState ? queueState.items?.map(mapYTMQueueItems) : [];
-    const automixItems = queueState ? queueState.automixItems?.map(mapYTMQueueItems) : [];
+    const queueItems = queueState ? (queueState.items?.map(mapYTMQueueItems).filter(Boolean) as PlayerQueueItem[]) : [];
+    const automixItems = queueState ? (queueState.automixItems?.map(mapYTMQueueItems).filter(Boolean) as PlayerQueueItem[]) : [];
     this.queue = queueState
       ? {
           // automixItems comes from an autoplay queue that isn't pushed yet to the main queue. A radio will never have automixItems (weird YTM distinction from autoplay vs radio)

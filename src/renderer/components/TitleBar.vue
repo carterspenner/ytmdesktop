@@ -113,7 +113,7 @@ if (props.isMainWindow) {
         <button v-if="hasMaximizeButton && !windowMaximized" class="action-button window-maximize" tabindex="5" @click="maximizeWindow">
           <span class="material-symbols-outlined">square</span>
         </button>
-        <button v-if="hasMinimizeButton && windowMaximized" class="action-button window-restore" tabindex="6" @click="restoreWindow">
+        <button v-if="hasMaximizeButton && windowMaximized" class="action-button window-restore" tabindex="6" @click="restoreWindow">
           <span class="material-symbols-outlined">filter_none</span>
         </button>
         <button class="action-button window-close" tabindex="7" @click="closeWindow">

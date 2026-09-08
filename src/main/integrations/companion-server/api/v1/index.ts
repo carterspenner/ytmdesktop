@@ -147,7 +147,8 @@ const CompanionServerAPIv1: FastifyPluginCallback<CompanionServerAPIv1Options> =
 
         case "seekTo": {
           const position = commandRequest.data;
-          if (isNaN(position) || position < 0 || position > playerStateStore.getState().videoDetails.durationSeconds) {
+          const videoDetails = playerStateStore.getState().videoDetails;
+          if (isNaN(position) || position < 0 || !videoDetails || position > videoDetails.durationSeconds) {
             throw new InvalidPositionError(position);
           }
           ytmView.webContents.send("remoteControl:execute", "seekTo", position);
@@ -210,7 +211,7 @@ const CompanionServerAPIv1: FastifyPluginCallback<CompanionServerAPIv1Options> =
           const index = commandRequest.data;
           const state = playerStateStore.getState();
 
-          if (isNaN(index) || index > state.queue.items.length + state.queue.automixItems.length - 1) {
+          if (isNaN(index) || !state.queue || index > state.queue.items.length + state.queue.automixItems.length - 1) {
             throw new InvalidQueueIndexError(index);
           }
 
@@ -444,20 +445,22 @@ const CompanionServerAPIv1: FastifyPluginCallback<CompanionServerAPIv1Options> =
       if (ytmView) {
         const requestId = crypto.randomUUID();
 
-        const playlistsResponseListener = (event: Electron.IpcMainEvent, playlists: Playlist[]) => {
-          if (event.sender !== ytmView.webContents) return;
-          response.send(playlists);
-        };
-        ipcMain.once(`ytmView:getPlaylists:response:${requestId}`, playlistsResponseListener);
-
-        ytmView.webContents.send(`ytmView:getPlaylists`, requestId);
-
-        await new Promise((_resolve, reject) =>
-          setTimeout(() => {
+        const playlists = await new Promise<Playlist[]>((resolve, reject) => {
+          const timeout = setTimeout(() => {
             ipcMain.removeListener(`ytmView:getPlaylists:response:${requestId}`, playlistsResponseListener);
             reject(new YouTubeMusicTimeOutError());
-          }, 1000 * 30)
-        );
+          }, 1000 * 30);
+
+          const playlistsResponseListener = (event: Electron.IpcMainEvent, playlists: Playlist[]) => {
+            if (event.sender !== ytmView.webContents) return;
+            clearTimeout(timeout);
+            resolve(playlists);
+          };
+          ipcMain.once(`ytmView:getPlaylists:response:${requestId}`, playlistsResponseListener);
+
+          ytmView.webContents.send(`ytmView:getPlaylists`, requestId);
+        });
+        response.send(playlists);
       } else {
         throw new YouTubeMusicUnavailableError();
       }

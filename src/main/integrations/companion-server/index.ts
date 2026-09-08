@@ -92,9 +92,14 @@ export default class CompanionServer implements IIntegration {
         port: this.listenPort
       });
       this.storeListener = this.store.onDidChange("integrations", async newState => {
-        const validTokenIds: string[] = newState.companionServerAuthTokens
-          ? JSON.parse(safeStorage.decryptString(Buffer.from(newState.companionServerAuthTokens, "hex"))).map((authToken: AuthToken) => authToken.id)
-          : [];
+        let validTokenIds: string[] = [];
+        try {
+          validTokenIds = newState.companionServerAuthTokens
+            ? JSON.parse(safeStorage.decryptString(Buffer.from(newState.companionServerAuthTokens, "hex"))).map((authToken: AuthToken) => authToken.id)
+            : [];
+        } catch {
+          /* corrupted token data, treat as no valid tokens */
+        }
         if (this.fastifyServer.server.listening) {
           const namespaces = this.fastifyServer.io._nsps.keys();
           let sockets: RemoteSocket<DefaultEventsMap, { tokenId: string }>[] = [];
