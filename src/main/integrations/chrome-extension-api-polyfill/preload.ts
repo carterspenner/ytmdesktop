@@ -36,9 +36,21 @@ type StorageArea = {
   clear(callback?: () => void): void;
 };
 
+type StorageChange = { oldValue?: unknown; newValue?: unknown };
+type StorageChanges = Record<string, StorageChange>;
+type OnChangedListener = (changes: StorageChanges, areaName: string) => void;
+
 declare const chrome: {
   alarms?: unknown;
-  storage?: { local: StorageArea; sync?: StorageArea };
+  storage?: {
+    local: StorageArea;
+    sync?: StorageArea;
+    onChanged?: {
+      addListener(callback: OnChangedListener): void;
+      removeListener(callback: OnChangedListener): void;
+      hasListener?(callback: OnChangedListener): boolean;
+    };
+  };
   runtime?: { id?: string; getManifest?: () => { permissions?: string[] } };
 };
 
@@ -213,9 +225,59 @@ function installStorageSyncPolyfill(): void {
     return Object.keys(keys as Record<string, unknown>);
   }
 
-  // This is a single-user desktop app with no concept of syncing across devices, so this store is
-  // just chrome.storage.local's persistence under the hood - extensions get a working, persisted
-  // store instead of a crash, they just don't get real multi-device sync (which isn't meaningful here).
+  // Intercept chrome.storage.onChanged so we can:
+  // 1. Fire synthetic events with areaName "sync" when our polyfill writes data
+  // 2. Suppress the native "local" event for our internal NAMESPACE_KEY, which would otherwise
+  //    confuse extensions (Better Lyrics checks for changes.customCSS but sees changes.__chromeStorageSyncPolyfill__ instead)
+  const syncOnChangedListeners = new Set<OnChangedListener>();
+  const nativeOnChanged = chrome.storage.onChanged;
+  if (nativeOnChanged) {
+    const nativeAddListener = nativeOnChanged.addListener.bind(nativeOnChanged);
+    const nativeRemoveListener = nativeOnChanged.removeListener.bind(nativeOnChanged);
+
+    const wrappedListeners = new Map<OnChangedListener, OnChangedListener>();
+
+    nativeOnChanged.addListener = (listener: OnChangedListener) => {
+      syncOnChangedListeners.add(listener);
+      const wrapper: OnChangedListener = (changes, areaName) => {
+        if (areaName === "local" && NAMESPACE_KEY in changes) {
+          const filtered = { ...changes };
+          delete filtered[NAMESPACE_KEY];
+          if (Object.keys(filtered).length === 0) return;
+          listener(filtered, areaName);
+          return;
+        }
+        listener(changes, areaName);
+      };
+      wrappedListeners.set(listener, wrapper);
+      nativeAddListener(wrapper);
+    };
+
+    nativeOnChanged.removeListener = (listener: OnChangedListener) => {
+      syncOnChangedListeners.delete(listener);
+      const wrapper = wrappedListeners.get(listener);
+      if (wrapper) {
+        wrappedListeners.delete(listener);
+        nativeRemoveListener(wrapper);
+      }
+    };
+
+    if (nativeOnChanged.hasListener) {
+      nativeOnChanged.hasListener = (listener: OnChangedListener) => wrappedListeners.has(listener);
+    }
+  }
+
+  function fireSyncChanges(changes: StorageChanges) {
+    if (Object.keys(changes).length === 0) return;
+    for (const listener of syncOnChangedListeners) {
+      try {
+        listener(changes, "sync");
+      } catch (error) {
+        console.error("[chrome-extension-api-polyfill] onChanged listener error", error);
+      }
+    }
+  }
+
   const syncImpl = {
     get(keys: unknown, callback?: (items: Record<string, unknown>) => void) {
       return callbackOrPromise(callback, async () => {
@@ -232,19 +294,40 @@ function installStorageSyncPolyfill(): void {
     set(items: Record<string, unknown>, callback?: () => void) {
       return callbackOrPromise(callback, async () => {
         const all = await readNamespace();
+        const changes: StorageChanges = {};
+        for (const [key, newValue] of Object.entries(items)) {
+          changes[key] = { newValue };
+          if (key in all) changes[key].oldValue = all[key];
+        }
         await writeNamespace({ ...all, ...items });
+        fireSyncChanges(changes);
       });
     },
     remove(keys: string | string[], callback?: () => void) {
       return callbackOrPromise(callback, async () => {
         const all = await readNamespace();
         const next = { ...all };
-        for (const key of normalizeKeys(keys)) delete next[key];
+        const changes: StorageChanges = {};
+        for (const key of normalizeKeys(keys)) {
+          if (key in all) {
+            changes[key] = { oldValue: all[key] };
+          }
+          delete next[key];
+        }
         await writeNamespace(next);
+        fireSyncChanges(changes);
       });
     },
     clear(callback?: () => void) {
-      return callbackOrPromise(callback, () => writeNamespace({}));
+      return callbackOrPromise(callback, async () => {
+        const all = await readNamespace();
+        const changes: StorageChanges = {};
+        for (const [key, value] of Object.entries(all)) {
+          changes[key] = { oldValue: value };
+        }
+        await writeNamespace({});
+        fireSyncChanges(changes);
+      });
     }
   };
 
