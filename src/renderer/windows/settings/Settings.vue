@@ -55,9 +55,15 @@ const progressInTaskbar = ref<boolean>(playback.progressInTaskbar);
 const ratioVolume = ref<boolean>(playback.ratioVolume);
 
 const companionServerEnabled = ref<boolean>(integrations.companionServerEnabled);
-const companionServerAuthTokens = ref<AuthToken[]>(
-  safeStorageAvailable.value ? (JSON.parse(await safeStorage.decryptString(integrations.companionServerAuthTokens)) ?? []) : []
-);
+let initialAuthTokens: AuthToken[] = [];
+try {
+  if (safeStorageAvailable.value && integrations.companionServerAuthTokens) {
+    initialAuthTokens = JSON.parse(await safeStorage.decryptString(integrations.companionServerAuthTokens)) ?? [];
+  }
+} catch {
+  /* Decryption can fail after OS reinstall or key rotation - fall back to empty */
+}
+const companionServerAuthTokens = ref<AuthToken[]>(initialAuthTokens);
 const companionServerCORSWildcardEnabled = ref<boolean>(integrations.companionServerCORSWildcardEnabled);
 const discordPresenceEnabled = ref<boolean>(integrations.discordPresenceEnabled);
 const lastFMEnabled = ref<boolean>(integrations.lastFMEnabled);
@@ -95,9 +101,14 @@ store.onDidAnyChange(async newState => {
   ratioVolume.value = newState.playback.ratioVolume;
 
   companionServerEnabled.value = newState.integrations.companionServerEnabled;
-  companionServerAuthTokens.value = safeStorageAvailable.value
-    ? (JSON.parse(await safeStorage.decryptString(newState.integrations.companionServerAuthTokens)) ?? [])
-    : [];
+  try {
+    companionServerAuthTokens.value =
+      safeStorageAvailable.value && newState.integrations.companionServerAuthTokens
+        ? (JSON.parse(await safeStorage.decryptString(newState.integrations.companionServerAuthTokens)) ?? [])
+        : [];
+  } catch {
+    companionServerAuthTokens.value = [];
+  }
   companionServerCORSWildcardEnabled.value = newState.integrations.companionServerCORSWildcardEnabled;
   discordPresenceEnabled.value = newState.integrations.discordPresenceEnabled;
   lastFMEnabled.value = newState.integrations.lastFMEnabled;
@@ -318,7 +329,7 @@ window.ytmd.handleUpdateDownloaded(() => {
         <div v-if="currentTab === 1" class="general-tab">
           <YTMDSetting v-if="!isDarwin" v-model="hideToTrayOnClose" type="checkbox" name="Hide to tray on close" @change="settingsChanged" />
           <YTMDSetting v-model="showNotificationOnSongChange" type="checkbox" name="Show notification on song change" @change="settingsChanged" />
-          <YTMDSetting v-model="startOnBoot" type="checkbox" name="Start on boot" @change="settingsChanged" />
+          <YTMDSetting v-if="!isLinux" v-model="startOnBoot" type="checkbox" name="Start on boot" @change="settingsChanged" />
           <!--<div class="setting">
             <p>Start minimized</p>
             <input v-model="startMinimized" @change="settingsChanged" class="toggle" type="checkbox" />
@@ -430,7 +441,7 @@ window.ytmd.handleUpdateDownloaded(() => {
               </tbody>
             </table>
             <div v-if="companionServerAuthTokens.length === 0" class="no-authorized-companions">
-              <td>No authorized companions</td>
+              <p>No authorized companions</p>
             </div>
           </YTMDSetting>
           <YTMDSetting v-model="discordPresenceEnabled" type="checkbox" name="Discord rich presence" @change="settingsChanged" />
@@ -450,7 +461,7 @@ window.ytmd.handleUpdateDownloaded(() => {
             <p class="discord-failure">Could not download or load uBlock Origin. Check your internet connection.</p>
             <button @click="retryAdBlocker">Retry</button>
           </div>
-          <div class="setting indented">
+          <div v-if="adBlockEnabled" class="setting indented">
             <p class="muted-description">Experiencing crashes or high memory use with the ad blocker? Reset its stored filter list data.</p>
             <button @click="resetAdBlockerData">Reset ad blocker data</button>
           </div>

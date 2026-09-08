@@ -49,25 +49,21 @@ export default class BetterLyrics implements IIntegration {
       this.memoryStore?.set("betterLyricsLoadFailed", false);
       log.info(`Better Lyrics: loaded (${extension.version})`);
 
-      // Electron bug (electron/electron#41613, fixed in 42+ only - this app currently targets an
-      // earlier Electron): an extension's Manifest V3 service worker starts correctly the very
-      // first time it's ever loaded, but silently fails to auto-start on every subsequent app
-      // launch, because Electron mismanages the Chromium preference that's supposed to track
-      // whether the worker has started before. Whatever startup logic lives in Better Lyrics' own
-      // background service worker (confirmed, via a real device log, to include reapplying a
-      // previously saved theme - its chrome.storage.local data is intact after a restart, but
-      // nothing ever reads it without this) then never runs. Explicitly starting the worker here
-      // works around it until this app can move to Electron 42+.
+      // Electron bug (electron/electron#41613): an extension's Manifest V3 service worker starts
+      // correctly the very first time it's ever loaded, but silently fails to auto-start on every
+      // subsequent app launch. The upstream fix landed in Electron 42, which this app now targets,
+      // but the explicit start is kept as a defensive fallback - it's harmless when the auto-start
+      // works and prevents a silent regression if the fix is incomplete or reverts in a patch.
       //
-      // Deliberately not started immediately: a follow-up real device log showed this racing
-      // Better Lyrics' own content script for its first chrome.storage.local access during the
-      // same page load, and losing - Chromium's storage quota enforcer takes an exclusive LOCK
-      // file on the extension's storage database while computing usage, and the loser's read comes
-      // back completely empty instead of waiting. Deferring until the current ytmView page load
-      // finishes (content scripts run at document_start, well before that) gives the content
-      // script's own early reads a full, uncontested run first. Falls back to a fixed delay if no
-      // load is in flight (e.g. this integration gets enabled mid-session, well after ytmView's
-      // page already finished loading, so 'did-finish-load' would never fire again).
+      // Deliberately not started immediately: a real device log showed this racing Better Lyrics'
+      // own content script for its first chrome.storage.local access during the same page load,
+      // and losing - Chromium's storage quota enforcer takes an exclusive LOCK file on the
+      // extension's storage database while computing usage, and the loser's read comes back
+      // completely empty instead of waiting. Deferring until the current ytmView page load finishes
+      // (content scripts run at document_start, well before that) gives the content script's own
+      // early reads a full, uncontested run first. Falls back to a fixed delay if no load is in
+      // flight (e.g. this integration gets enabled mid-session, well after ytmView's page already
+      // finished loading, so 'did-finish-load' would never fire again).
       const startServiceWorker = (): void => {
         this.ytmView?.webContents.session.serviceWorkers.startWorkerForScope(`chrome-extension://${extension.id}/`).catch(error => {
           log.warn("Better Lyrics: failed to explicitly start extension service worker", error);

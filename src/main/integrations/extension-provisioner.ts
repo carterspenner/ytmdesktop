@@ -107,10 +107,14 @@ function downloadFile(url: string, destination: string): Promise<void> {
       response.on("end", () => fileStream.end());
       response.on("error", error => {
         fileStream.destroy();
+        fsPromises.rm(destination, { force: true }).catch((): undefined => undefined);
         reject(error);
       });
       fileStream.on("finish", resolve);
-      fileStream.on("error", reject);
+      fileStream.on("error", error => {
+        fsPromises.rm(destination, { force: true }).catch((): undefined => undefined);
+        reject(error);
+      });
     });
     request.on("error", reject);
     request.end();
