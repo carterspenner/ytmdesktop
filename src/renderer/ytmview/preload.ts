@@ -310,63 +310,68 @@ window.addEventListener("load", async () => {
     console.error("[ytmView preload] Error during post-load setup (app will still load):", e);
   }
 
-  const integrationScripts: { [integrationName: string]: { [scriptName: string]: string } } = await ipcRenderer.invoke("ytmView:getIntegrationScripts");
+  let integrationScripts: { [integrationName: string]: { [scriptName: string]: string } } = {};
+  try {
+    integrationScripts = await ipcRenderer.invoke("ytmView:getIntegrationScripts");
 
-  const state = await store.get("state");
-  const continueWhereYouLeftOff = (await store.get("playback")).continueWhereYouLeftOff;
+    const state = await store.get("state");
+    const continueWhereYouLeftOff = (await store.get("playback")).continueWhereYouLeftOff;
 
-  if (continueWhereYouLeftOff) {
-    // The last page the user was on is already a page where it will be playing a song from (no point telling YTM to play it again)
-    if (!state.lastUrl.startsWith("https://music.youtube.com/watch")) {
-      if (state.lastVideoId) {
-        // This height transition check is a hack to fix the `Start playback` hint from not being in the correct position https://github.com/ytmdesktop/ytmdesktop/issues/1159
-        let heightTransitionCount = 0;
-        const transitionEnd = async (e: TransitionEvent) => {
-          if (e.target === document.querySelector("ytmusic-app-layout>ytmusic-player-bar")) {
-            if (e.propertyName === "height") {
-              (
-                await webFrame.executeJavaScript(`
-                  (function() {
-                    document.querySelector("ytmusic-popup-container").refitPopups_();
-                  })
-                `)
-              )();
-              heightTransitionCount++;
-              if (heightTransitionCount >= 2) {
-                document.querySelector("ytmusic-app-layout>ytmusic-player-bar").removeEventListener("transitionend", transitionEnd);
-              }
-            }
-          }
-        };
-        document.querySelector("ytmusic-app-layout>ytmusic-player-bar").addEventListener("transitionend", transitionEnd);
-
-        document.dispatchEvent(
-          new CustomEvent("yt-navigate", {
-            detail: {
-              endpoint: {
-                watchEndpoint: {
-                  videoId: state.lastVideoId,
-                  playlistId: state.lastPlaylistId
+    if (continueWhereYouLeftOff) {
+      // The last page the user was on is already a page where it will be playing a song from (no point telling YTM to play it again)
+      if (!state.lastUrl.startsWith("https://music.youtube.com/watch")) {
+        if (state.lastVideoId) {
+          // This height transition check is a hack to fix the `Start playback` hint from not being in the correct position https://github.com/ytmdesktop/ytmdesktop/issues/1159
+          let heightTransitionCount = 0;
+          const transitionEnd = async (e: TransitionEvent) => {
+            if (e.target === document.querySelector("ytmusic-app-layout>ytmusic-player-bar")) {
+              if (e.propertyName === "height") {
+                (
+                  await webFrame.executeJavaScript(`
+                    (function() {
+                      document.querySelector("ytmusic-popup-container").refitPopups_();
+                    })
+                  `)
+                )();
+                heightTransitionCount++;
+                if (heightTransitionCount >= 2) {
+                  document.querySelector("ytmusic-app-layout>ytmusic-player-bar").removeEventListener("transitionend", transitionEnd);
                 }
               }
             }
-          })
-        );
-      }
-    } else {
-      (
-        await webFrame.executeJavaScript(`
-          (function() {
-            window.ytmd.sendVideoData(document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getPlayerResponse().videoDetails, document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getPlaylistId());
-          })
-        `)
-      )();
-    }
-  }
+          };
+          document.querySelector("ytmusic-app-layout>ytmusic-player-bar").addEventListener("transitionend", transitionEnd);
 
-  const alwaysShowVolumeSlider = (await store.get("appearance")).alwaysShowVolumeSlider;
-  if (alwaysShowVolumeSlider) {
-    document.querySelector("ytmusic-app-layout>ytmusic-player-bar #volume-slider").classList.add("ytmd-persist-volume-slider");
+          document.dispatchEvent(
+            new CustomEvent("yt-navigate", {
+              detail: {
+                endpoint: {
+                  watchEndpoint: {
+                    videoId: state.lastVideoId,
+                    playlistId: state.lastPlaylistId
+                  }
+                }
+              }
+            })
+          );
+        }
+      } else {
+        (
+          await webFrame.executeJavaScript(`
+            (function() {
+              window.ytmd.sendVideoData(document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getPlayerResponse().videoDetails, document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getPlaylistId());
+            })
+          `)
+        )();
+      }
+    }
+
+    const alwaysShowVolumeSlider = (await store.get("appearance")).alwaysShowVolumeSlider;
+    if (alwaysShowVolumeSlider) {
+      document.querySelector("ytmusic-app-layout>ytmusic-player-bar #volume-slider").classList.add("ytmd-persist-volume-slider");
+    }
+  } catch (e) {
+    console.error("[ytmView preload] Error during post-load initialization (app will still load):", e);
   }
 
   ipcRenderer.on("remoteControl:execute", async (_event, command, value) => {
