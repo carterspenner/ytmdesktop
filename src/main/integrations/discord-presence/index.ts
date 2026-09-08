@@ -130,7 +130,7 @@ export default class DiscordPresence implements IIntegration {
     this.pauseTimeout = null;
     if (state.trackState == VideoState.Playing) return;
     this.pauseTimeout = setTimeout(() => {
-      if (!this.discordClient && !this.ready) return;
+      if (!this.discordClient || !this.ready) return;
       this.discordClient.clearActivity();
       this.pauseTimeout = null;
     }, 30 * 1000);

@@ -47,8 +47,8 @@ export default class CustomCSS implements IIntegration {
       this.storeListener();
       this.storeListener = null;
     }
-    this.storeListener = this.store.onDidChange("appearance", (oldState, newState) => {
-      if (newState.customCSSEnabled && oldState.customCSSPath != newState.customCSSPath) {
+    this.storeListener = this.store.onDidChange("appearance", (newState, oldState) => {
+      if (newState.customCSSEnabled && newState.customCSSPath !== oldState.customCSSPath) {
         this.updateCSS();
       }
     });
@@ -106,8 +106,10 @@ export default class CustomCSS implements IIntegration {
         ipcMain.removeListener("ytmView:loaded", this.ipcListener);
       }
       this.ipcListener = () => {
-        this.ytmView.webContents.insertCSS(content).then(customCssRef => {
-          this.customCSSKey = customCssRef;
+        this.removeCSS().then(() => {
+          this.ytmView.webContents.insertCSS(content).then(customCssRef => {
+            this.customCSSKey = customCssRef;
+          });
         });
       };
       ipcMain.once("ytmView:loaded", this.ipcListener);

@@ -102,7 +102,7 @@ export function isAuthValid(store: Conf<StoreSchema>, authToken: string): [boole
   let validSession = false;
   let id = null;
   for (const authSession of authTokens) {
-    if (authSession.token == authTokenHash) {
+    if (authSession.token === authTokenHash) {
       id = authSession.id;
       validSession = true;
       break;
