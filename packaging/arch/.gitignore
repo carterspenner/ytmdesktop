@@ -1,0 +1,6 @@
+# Local packaging artifacts (CI stages these at build time; never commit them)
+app.tar.gz
+src/
+pkg/
+*.pkg.tar.zst
+youtube-music-desktop-app.png
