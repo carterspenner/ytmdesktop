@@ -94,22 +94,39 @@ The `window load` handler in `ytmview/preload.ts` does these things sequentially
 - **Root cause of continued hang**: The code in step 5 above (lines 313-370) accesses DOM elements that don't exist when the timeout fires (because YouTube Music didn't fully initialize). Null-access crashes abort the async handler before `ytmView:loaded`.
 - **Fix**: Wrapped that entire section in try/catch.
 
-### What's Still Broken
-The loading screen STILL hangs on Arch Linux despite all the above fixes. This means the issue is likely NOT in the `window load` handler's sequential steps, or there's something even earlier preventing the handler from running at all.
+## Resolution (2026-09-08): The Fixes Were Never In The Running App
 
-## Hypotheses for the Remaining Hang (Not Yet Investigated)
+**Root cause of the "still broken" hang: the installed app never contained commits 3 and 4.**
 
-1. **The `window load` event never fires**: If YouTube Music's page never finishes loading (e.g., a resource hangs indefinitely), the `load` event won't fire and none of the code in the handler runs. Check if `DOMContentLoaded` fires but `load` doesn't.
+Evidence (all verified on the live system):
 
-2. **The IIFE at the top of preload.ts throws or hangs**: The immediately-invoked code at lines 1-217 (the Polymer hook setup) runs before the `load` event listener is even registered. If it crashes, the listener might never get added. This code does `webFrame.executeJavaScript` synchronously and patches `Object.defineProperty` on `window` — if YouTube Music changed its Polymer initialization, this could fail.
+- The app Carter launches is the pacman package at `/usr/lib/youtube-music-desktop-app` (Electron 42.7.0), whose `resources/app.asar` was built **2026-07-19 14:39** - i.e. from the fork state at commit `2d1c354` (the Electron 42.7.0 upgrade), **before** the `claude/chrome-extension-embed-wjiuov` commits existed.
+- Grepping that asar: it contains `ytmd-diag` and `__chromeStorageSyncPolyfill__` (pre-Sep-8 fork additions) but **zero** occurrences of `Timed out waiting for playerApi`, `ytmView preload`, or the post-timeout try/catch strings from commits `9251075`/`90c2b24`. Same for `main.old.log` (Jul 19 build, zero breadcrumbs).
+- Its preload still has the raw `document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.isReady()` polling expression. `main.log` shows the result: `Uncaught (in promise) Error: Cannot read properties of undefined (reading 'isReady')` thrown every ~1s from launch onward, forever - the polling loop's `webFrame.executeJavaScript(...)` promise rejects, the interval callback dies before `clearInterval`, `ytmView:loaded` never sends, the loading screen never dismisses. The commits were correct; they just weren't in the binary.
 
-3. **The `ytmView` BrowserView itself isn't loading the page**: Check `src/main/index.ts` for how `ytmView` is created and what URL it loads. If the URL never loads (network issue, certificate issue on Arch), the `load` event never fires.
+**Fix verified by building and running the packaged output:**
 
-4. **A different preload script crashes first**: The ytmView has multiple preloads (the extension polyfill, the extension API preload, and the ytmview preload itself). If an earlier preload crashes, Electron may skip subsequent ones.
+1. `yarn install --immutable` then `yarn package` (Electron Forge + Vite; output in `out/YouTube Music Desktop App-linux-x64/`).
+2. Verified the fresh asar contains all fix strings and no longer contains `__chromeStorageSyncPolyfill__`.
+3. Killed the stale instance, ran the fresh build: user confirmed the app loaded past the loading screen. Log breadcrumbs show the timeout path working as designed:
+   ```
+   [ytmView preload] Timed out waiting for playerApi.isReady(), continuing anyway
+   [ytmView preload] Error during post-load setup (app will still load): ... 'addEventListener'
+   ```
+   then `ytmView:loaded` fired and the UI appeared. The old once-per-second `isReady` spam is gone.
 
-5. **Electron/Chromium version incompatibility on Arch**: Arch uses rolling releases and may have system libraries (especially GPU/graphics related) that conflict with Electron 42.7.0's bundled Chromium. GPU acceleration issues can cause BrowserViews to never paint or load.
+**Remaining known issues (non-fatal, observed on the fresh build / in recent logs):**
 
-6. **The `webFrame.executeJavaScript` calls in the IIFE hang**: The top-of-file IIFE calls `webFrame.executeJavaScript` to set up the Polymer hook. If the main world JavaScript context isn't ready, this could hang forever, and since it's awaited at the top level before the `load` listener is registered, everything blocks.
+1. On this machine YTM's `playerApi` often doesn't signal ready within 30s, so startup routinely takes the timeout path (~30s to load). The app still works; worth investigating why `isReady()` stays false (network slowness, GPU/paint on Wayland+Arch) if startup feels sluggish.
+2. When the timeout path fires early, `overrideHistoryButtonDisplay()` / nav-arrow setup can throw `Cannot read properties of undefined (reading 'addEventListener')` (missing `#history-link`) - already caught and harmless, but could be null-guarded later.
+3. `TypeError [ERR_INVALID_ARG_VALUE] ... createRequire ... Received undefined` from `.vite/main/index.js:29` on every launch (pre-dates Sep 8; non-fatal, window still creates). Some integration constructs a require from an undefined filename in the asar build. Separate issue, uninvestigated.
+4. `MaxListenersExceededWarning: 11 destroyed listeners on [WebContents]` - minor leak around context menu re-creation in uBlock's background page.
+
+**How to run the fixed build (until it replaces the system package):**
+
+- Dev: `yarn start` from the repo root (needs `node_modules`, `yarn install --immutable` first).
+- Packaged: `yarn package`, then run `out/"YouTube Music Desktop App"-linux-x64/youtube-music-desktop-app`.
+- To make it the system app (what pacman owns at `/usr/lib/youtube-music-desktop-app`): follow the recipe in `packaging/arch/PKGBUILD` comments - `yarn package --arch x64 --platform linux`, tar `out/<name>-linux-x64` as `app`, then `makepkg -f` and `pacman -U`.
 
 ## Debugging Tips
 
