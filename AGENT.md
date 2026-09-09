@@ -94,6 +94,15 @@ The `window load` handler in `ytmview/preload.ts` does these things sequentially
 - **Root cause of continued hang**: The code in step 5 above (lines 313-370) accesses DOM elements that don't exist when the timeout fires (because YouTube Music didn't fully initialize). Null-access crashes abort the async handler before `ytmView:loaded`.
 - **Fix**: Wrapped that entire section in try/catch.
 
+### Commit 5: `2026-09-08` - Restore playerApi on the player-bar element (YTM moved the API to `el.inst`)
+
+- **Root cause**: YouTube Music changed server-side between Sep 5 and Sep 8 2026 (installed binary unchanged since Jul 19; zero `isReady` errors in 6 weeks of logs before Sep 8, 454 on Sep 8): the player API moved off the player-bar element onto its Polymer instance - `el.playerApi` is now `el.inst.playerApi`. A CDP probe found `playerApi` on **zero** of 5,581 DOM elements.
+- **Effect**: the `playerApi.isReady()` ready-gate never passed, so every launch sat on the loading screen for the full 30-second timeout, and post-timeout setup then threw on missing `#history-link` (a knock-on of the late path).
+- **Fix**: preload defines `window.__YTMD_INSTALL_PLAYER_API_SHIM__` at top level and invokes it from both ready-poll loops (installing at preload top-level alone proved unreliable - custom element registration can land after preload code runs). The installer defines a `playerApi` alias getter on the `ytmusic-player-bar` class prototype (`return this.inst ? this.inst.playerApi : undefined`), so all ~30 existing call sites across the preload and injected scripts work unmodified. If Google restores a native definition, it shadows the shim and the shim becomes inert.
+- **Verified** via CDP probes (`scripts/probe-ytm-*.py`, debug port + copied profile): `playerApi: true, isReady: true` ~2s after page load (previously never), playback works (track titles, `getVolume()` returns real values), zero `isReady` errors, no timeout warning, no post-load setup error in the fixed run.
+
+**YTM DOM watch item (for future breakage)**: the page now renders TWO player bars - the classic `ytmusic-app-layout>ytmusic-player-bar` (still present, targeted by all our queries, but computed `display: grid` with `height: 0` - effectively retired) and a new `div>ytmusic-player-bar.top-player-bar` (Google's "mweb player bar modernization" experiment). Both expose `inst.playerApi` today and the shim covers both. If Google deletes the classic bar entirely, every `ytmusic-app-layout>ytmusic-player-bar` query in this preload and the scripts fails wholesale and ytmd will need to retarget.
+
 ## Resolution (2026-09-08): The Fixes Were Never In The Running App
 
 **Root cause of the "still broken" hang: the installed app never contained commits 3 and 4.**

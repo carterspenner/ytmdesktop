@@ -216,6 +216,50 @@ function getYTMTextRun(runs: { text: string }[]) {
   )();
 })();
 
+// YTM (2026-09) moved the player API off the player-bar element onto its Polymer
+// instance (el.inst.playerApi). Every el.playerApi access in this preload and the
+// injected scripts (isReady polling, play/pause/seek, getplaylists, like/dislike,
+// playerbar controls) broke as a result - the element just reports undefined.
+// Shim playerApi back onto the element class as an alias getter so all of those
+// references work unmodified. If Google restores a native definition later, theirs
+// replaces/shadows this one and the shim becomes inert.
+//
+// The installer is only DEFINED here (top-level, before anything else needs it) and
+// is invoked from the poll loops inside the load handler below - defineProperty at
+// preload time alone proved unreliable (the custom element registration this depends
+// on can land after preload top-level code runs), while the polls run until the
+// element exists, which is exactly the trigger condition we need.
+webFrame
+  .executeJavaScript(
+    `
+    window.__YTMD_INSTALL_PLAYER_API_SHIM__ = function() {
+      try {
+        var proto = window.customElements && window.customElements.get("ytmusic-player-bar");
+        proto = proto && proto.prototype;
+        if (!proto) {
+          return false;
+        }
+        if (Object.getOwnPropertyDescriptor(proto, "playerApi")) {
+          // Native definition exists (Google reverted) or shim already installed
+          return true;
+        }
+        var getter = function() {
+          return this.inst ? this.inst.playerApi : undefined;
+        };
+        getter.__ytmdShim = true;
+        Object.defineProperty(proto, "playerApi", {
+          configurable: true,
+          get: getter
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+  `
+  )
+  .catch(() => {});
+
 window.addEventListener("load", async () => {
   if (window.location.hostname !== "music.youtube.com") {
     if (window.location.hostname === "consent.youtube.com" || window.location.hostname === "accounts.google.com") {
@@ -231,16 +275,24 @@ window.addEventListener("load", async () => {
         const hooked = (
           await webFrame.executeJavaScript(`
           (function() {
+            // Also (re)install the playerApi element shim every poll - see the comment
+            // block above the installer definition for why it lives here.
+            var shimReady = window.__YTMD_INSTALL_PLAYER_API_SHIM__ ? window.__YTMD_INSTALL_PLAYER_API_SHIM__() : false;
+
             if (window.__YTMD_HOOK__) {
-              return true;
+              return shimReady + "|" + true;
             }
 
-            return false;
+            return shimReady + "|" + false;
           })
         `)
         )();
 
-        if (hooked) {
+        const [shimReady, hookReady] = hooked.split("|");
+        if (hookReady === "true") {
+          if (shimReady !== "true") {
+            console.warn("[ytmView preload] playerApi shim not installable (bar element class not defined yet)");
+          }
           clearInterval(interval);
           resolve();
           return;
@@ -275,6 +327,11 @@ window.addEventListener("load", async () => {
         const playerApiReady: boolean = (
           await webFrame.executeJavaScript(`
             (function() {
+              // (Re)install the shim here too - cheap when already installed, and it
+              // guarantees the getter exists on the class before we depend on it.
+              if (window.__YTMD_INSTALL_PLAYER_API_SHIM__) {
+                window.__YTMD_INSTALL_PLAYER_API_SHIM__();
+              }
               var el = document.querySelector("ytmusic-app-layout>ytmusic-player-bar");
               return el && el.playerApi && el.playerApi.isReady();
             })
