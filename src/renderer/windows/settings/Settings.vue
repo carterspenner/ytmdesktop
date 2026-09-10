@@ -623,7 +623,7 @@ window.ytmd.handleUpdateDownloaded(() => {
             <p class="commit">Commit: {{ ytmdCommitHash }}</p>
           </span>
           <div class="links">
-            <a href="https://github.com/ytmdesktop/ytmdesktop" target="_blank">GitHub</a>
+            <a href="https://github.com/snowdriftdev/ytmdesktop" target="_blank">GitHub</a>
             <a href="https://ytmdesktop.github.io/" target="_blank">Website</a>
           </div>
         </div>
