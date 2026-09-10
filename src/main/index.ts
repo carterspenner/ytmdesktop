@@ -1021,7 +1021,11 @@ const createOrShowSettingsWindow = (): void => {
   });
 
   settingsWindow.webContents.setWindowOpenHandler(details => {
-    if (details.url === "https://github.com/ytmdesktop/ytmdesktop" || details.url === "https://ytmdesktop.github.io/") {
+    if (
+      details.url === "https://github.com/snowdriftdev/ytmdesktop" ||
+      details.url === "https://github.com/ytmdesktop/ytmdesktop" ||
+      details.url === "https://ytmdesktop.github.io/"
+    ) {
       shell.openExternal(details.url);
     }
 
