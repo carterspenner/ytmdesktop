@@ -192,15 +192,17 @@ function getYTMTextRun(runs: { text: string }[]) {
   (
     await webFrame.executeJavaScript(`
     (function() {
+      window.__YTMD_HOOK__ = {};
+
       let fakeBaseClass = function() {
         try {
-          if (!window.__YTMD_HOOK__) {
+          if (window.__YTMD_HOOK__) {
+            if (this.hostElement && this.hostElement.nodeName === "YTMUSIC-PLAYER-BAR") {
+              window.__YTMD_HOOK__.ytmPlayerBar = this
+            }
+
             if (this.store && !!this.store.getState && !!this.store.dispatch && !!this.store.subscribe) {
-              let ytmdHook = {
-                ytmStore: this.store
-              };
-              Object.freeze(ytmdHook);
-              window.__YTMD_HOOK__ = ytmdHook;
+              window.__YTMD_HOOK__.ytmStore = this.store
             }
           }
         } catch {}
@@ -216,50 +218,6 @@ function getYTMTextRun(runs: { text: string }[]) {
   )();
 })();
 
-// YTM (2026-09) moved the player API off the player-bar element onto its Polymer
-// instance (el.inst.playerApi). Every el.playerApi access in this preload and the
-// injected scripts (isReady polling, play/pause/seek, getplaylists, like/dislike,
-// playerbar controls) broke as a result - the element just reports undefined.
-// Shim playerApi back onto the element class as an alias getter so all of those
-// references work unmodified. If Google restores a native definition later, theirs
-// replaces/shadows this one and the shim becomes inert.
-//
-// The installer is only DEFINED here (top-level, before anything else needs it) and
-// is invoked from the poll loops inside the load handler below - defineProperty at
-// preload time alone proved unreliable (the custom element registration this depends
-// on can land after preload top-level code runs), while the polls run until the
-// element exists, which is exactly the trigger condition we need.
-webFrame
-  .executeJavaScript(
-    `
-    window.__YTMD_INSTALL_PLAYER_API_SHIM__ = function() {
-      try {
-        var proto = window.customElements && window.customElements.get("ytmusic-player-bar");
-        proto = proto && proto.prototype;
-        if (!proto) {
-          return false;
-        }
-        if (Object.getOwnPropertyDescriptor(proto, "playerApi")) {
-          // Native definition exists (Google reverted) or shim already installed
-          return true;
-        }
-        var getter = function() {
-          return this.inst ? this.inst.playerApi : undefined;
-        };
-        getter.__ytmdShim = true;
-        Object.defineProperty(proto, "playerApi", {
-          configurable: true,
-          get: getter
-        });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-  `
-  )
-  .catch(() => {});
-
 window.addEventListener("load", async () => {
   if (window.location.hostname !== "music.youtube.com") {
     if (window.location.hostname === "consent.youtube.com" || window.location.hostname === "accounts.google.com") {
@@ -271,40 +229,32 @@ window.addEventListener("load", async () => {
   await new Promise<void>(resolve => {
     const startTime = Date.now();
     const interval = setInterval(async () => {
+      if (Date.now() - startTime > 30000) {
+        clearInterval(interval);
+        console.error("[YTMD] Timed out waiting for YTM hook after 30 seconds");
+        resolve();
+        return;
+      }
+
       try {
         const hooked = (
           await webFrame.executeJavaScript(`
           (function() {
-            // Also (re)install the playerApi element shim every poll - see the comment
-            // block above the installer definition for why it lives here.
-            var shimReady = window.__YTMD_INSTALL_PLAYER_API_SHIM__ ? window.__YTMD_INSTALL_PLAYER_API_SHIM__() : false;
-
-            if (window.__YTMD_HOOK__) {
-              return shimReady + "|" + true;
+            if (window.__YTMD_HOOK__ && (window.__YTMD_HOOK__.ytmStore && window.__YTMD_HOOK__.ytmPlayerBar && window.__YTMD_HOOK__.ytmPlayerBar.playerApi)) {
+              return true;
             }
 
-            return shimReady + "|" + false;
+            return false;
           })
         `)
         )();
 
-        const [shimReady, hookReady] = hooked.split("|");
-        if (hookReady === "true") {
-          if (shimReady !== "true") {
-            console.warn("[ytmView preload] playerApi shim not installable (bar element class not defined yet)");
-          }
+        if (hooked) {
           clearInterval(interval);
           resolve();
-          return;
         }
-      } catch {
-        // executeJavaScript can throw if the page context isn't ready yet
-      }
-
-      if (Date.now() - startTime > 30 * 1000) {
-        console.warn("[ytmView preload] Timed out waiting for __YTMD_HOOK__, continuing anyway");
-        clearInterval(interval);
-        resolve();
+      } catch (error) {
+        console.error("[YTMD] Error checking hook status:", error);
       }
     }, 250);
   });
@@ -316,6 +266,7 @@ window.addEventListener("load", async () => {
     materialSymbolsLoaded = true;
   };
   materialSymbols.onerror = () => {
+    console.error("[YTMD] Failed to load Material Symbols font");
     materialSymbolsLoaded = true;
   };
   document.head.appendChild(materialSymbols);
@@ -323,17 +274,18 @@ window.addEventListener("load", async () => {
   await new Promise<void>(resolve => {
     const startTime = Date.now();
     const interval = setInterval(async () => {
+      if (Date.now() - startTime > 30000) {
+        clearInterval(interval);
+        console.error("[YTMD] Timed out waiting for playerApi ready after 30 seconds");
+        resolve();
+        return;
+      }
+
       try {
         const playerApiReady: boolean = (
           await webFrame.executeJavaScript(`
             (function() {
-              // (Re)install the shim here too - cheap when already installed, and it
-              // guarantees the getter exists on the class before we depend on it.
-              if (window.__YTMD_INSTALL_PLAYER_API_SHIM__) {
-                window.__YTMD_INSTALL_PLAYER_API_SHIM__();
-              }
-              var el = document.querySelector("ytmusic-app-layout>ytmusic-player-bar");
-              return el && el.playerApi && el.playerApi.isReady();
+              return window.__YTMD_HOOK__.ytmPlayerBar.playerApi.isReady();
             })
           `)
         )();
@@ -341,16 +293,9 @@ window.addEventListener("load", async () => {
         if (materialSymbolsLoaded && playerApiReady) {
           clearInterval(interval);
           resolve();
-          return;
         }
-      } catch {
-        // executeJavaScript can throw if the page context isn't ready yet
-      }
-
-      if (Date.now() - startTime > 30 * 1000) {
-        console.warn("[ytmView preload] Timed out waiting for playerApi.isReady(), continuing anyway");
-        clearInterval(interval);
-        resolve();
+      } catch (error) {
+        console.error("[YTMD] Error checking playerApi ready:", error);
       }
     }, 250);
   });
@@ -363,8 +308,8 @@ window.addEventListener("load", async () => {
     await hideChromecastButton();
     await hookPlayerApiEvents();
     overrideHistoryButtonDisplay();
-  } catch (e) {
-    console.error("[ytmView preload] Error during post-load setup (app will still load):", e);
+  } catch (error) {
+    console.error("[YTMD] Error during UI setup:", error);
   }
 
   let integrationScripts: { [integrationName: string]: { [scriptName: string]: string } } = {};
@@ -416,7 +361,10 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              window.ytmd.sendVideoData(document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getPlayerResponse().videoDetails, document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getPlaylistId());
+              let playerResponse = window.__YTMD_HOOK__.ytmPlayerBar.playerApi.getPlayerResponse();
+              if (playerResponse) {
+                window.ytmd.sendVideoData(playerResponse.videoDetails, window.__YTMD_HOOK__.ytmPlayerBar.playerApi.getPlaylistId());
+              }
             })
           `)
         )();
@@ -427,8 +375,8 @@ window.addEventListener("load", async () => {
     if (alwaysShowVolumeSlider) {
       document.querySelector("ytmusic-app-layout>ytmusic-player-bar #volume-slider").classList.add("ytmd-persist-volume-slider");
     }
-  } catch (e) {
-    console.error("[ytmView preload] Error during post-load initialization (app will still load):", e);
+  } catch (error) {
+    console.error("[YTMD] Error during post-setup initialization:", error);
   }
 
   ipcRenderer.on("remoteControl:execute", async (_event, command, value) => {
@@ -437,7 +385,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playing ? document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.pauseVideo() : document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.playVideo();
+              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playing ? window.__YTMD_HOOK__.ytmPlayerBar.playerApi.pauseVideo() : window.__YTMD_HOOK__.ytmPlayerBar.playerApi.playVideo();
             })
           `)
         )();
@@ -448,7 +396,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.playVideo();
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.playVideo();
             })
           `)
         )();
@@ -459,7 +407,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.pauseVideo();
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.pauseVideo();
             })
           `)
         )();
@@ -470,7 +418,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.nextVideo();
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.nextVideo();
             })
           `)
         )();
@@ -481,7 +429,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.previousVideo();
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.previousVideo();
             })
           `)
         )();
@@ -502,19 +450,19 @@ window.addEventListener("load", async () => {
         const currentVolumeUp: number = (
           await webFrame.executeJavaScript(`
             (function() {
-              return document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getVolume();
+              return window.__YTMD_HOOK__.ytmPlayerBar.playerApi.getVolume();
             })
           `)
         )();
 
         let newVolumeUp = currentVolumeUp + 10;
-        if (newVolumeUp > 100) {
+        if (currentVolumeUp > 100) {
           newVolumeUp = 100;
         }
         (
           await webFrame.executeJavaScript(`
             (function(newVolumeUp) {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.setVolume(newVolumeUp);
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.setVolume(newVolumeUp);
               window.__YTMD_HOOK__.ytmStore.dispatch({ type: 'SET_VOLUME', payload: newVolumeUp });
             })
           `)
@@ -526,19 +474,19 @@ window.addEventListener("load", async () => {
         const currentVolumeDown: number = (
           await webFrame.executeJavaScript(`
             (function() {
-              return document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.getVolume();
+              return window.__YTMD_HOOK__.ytmPlayerBar.playerApi.getVolume();
             })
           `)
         )();
 
         let newVolumeDown = currentVolumeDown - 10;
-        if (newVolumeDown < 0) {
+        if (currentVolumeDown < 0) {
           newVolumeDown = 0;
         }
         (
           await webFrame.executeJavaScript(`
             (function(newVolumeDown) {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.setVolume(newVolumeDown);
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.setVolume(newVolumeDown);
               window.__YTMD_HOOK__.ytmStore.dispatch({ type: 'SET_VOLUME', payload: newVolumeDown });
             })
           `)
@@ -556,7 +504,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function(valueInt) {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.setVolume(valueInt);
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.setVolume(valueInt);
               window.__YTMD_HOOK__.ytmStore.dispatch({ type: 'SET_VOLUME', payload: valueInt });
             })
           `)
@@ -568,7 +516,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.mute();
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.mute();
               window.__YTMD_HOOK__.ytmStore.dispatch({ type: 'SET_MUTED', payload: true });
             })
           `)
@@ -579,7 +527,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function() {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.unMute();
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.unMute();
               window.__YTMD_HOOK__.ytmStore.dispatch({ type: 'SET_MUTED', payload: false });
             })
           `)
@@ -600,7 +548,7 @@ window.addEventListener("load", async () => {
         (
           await webFrame.executeJavaScript(`
             (function(value) {
-              document.querySelector("ytmusic-app-layout>ytmusic-player-bar").playerApi.seekTo(value);
+              window.__YTMD_HOOK__.ytmPlayerBar.playerApi.seekTo(value);
             })
           `)
         )(value);
