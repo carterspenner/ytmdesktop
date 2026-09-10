@@ -137,6 +137,40 @@ Evidence (all verified on the live system):
 - Packaged: `yarn package`, then run `out/"YouTube Music Desktop App"-linux-x64/youtube-music-desktop-app`.
 - To make it the system app (what pacman owns at `/usr/lib/youtube-music-desktop-app`): follow the recipe in `packaging/arch/PKGBUILD` comments - `yarn package --arch x64 --platform linux`, tar `out/<name>-linux-x64` as `app`, then `makepkg -f` and `pacman -U`.
 
+## DO NOT Merge Upstream Electron Bumps Blindly (2026-09-10 incident)
+
+**Rule: upstream Electron version bumps must be reverted or re-validated in this fork before merging. Upstream staying on/advancing Electron 44 (Chromium 152) is a known breakage for this app's extension support.**
+
+Incident: upstream PR merged Electron 42 → 44 (Chromium 150 → 152). On the installed build this broke extensions two ways:
+
+1. uBlock Origin 1.72.0 (MV2, loaded via `chromium` zip release) failed at startup on Chromium 152:
+   its background page threw `Cannot read properties of undefined (reading 'setBadgeBackgroundColor')`
+   and our polyfill logged `chrome.alarms is locked down in this context and could not be replaced`
+   (Chromium no longer manufactures several MV2-era APIs the same way). Background never installed
+   its webRequest listeners → **ads showed again**.
+2. Extension popups rendered as a small blank/gray box with content collapsed: `electron-chrome-extensions`
+   4.9.0 (July 2025) predates Chromium 152's popup preferred-size changes; uBlock's popup preferred size
+   collapsed 252×437 → 288×140 right as its own popup JS threw `undefined (reading 'split')`.
+   (Both popups' computed `anchorRect`/`updatePosition` values were actually correct — the geometry code
+   is fine; don't chase popup positioning math first.)
+
+Fix applied (commit in this branch): `package.json` electron bumped back to `^42.7.0` (resolves 42.11.3),
+full `yarn install → yarn lint → yarn package → makepkg → pacman -U` cycle. Verified on relaunch: no
+polyfill lock-down error, no badge error, uBlock popup renders normally, user confirmed blocking works.
+
+When re-attempting the 44 bump, gate it on ALL of:
+- electron-chrome-extensions publishing a release that handles Chromium 152 (check their GitHub after Jul 2025);
+- uBlock 1.72.x background page starting clean under Chromium 152 (no `Failed to create API on Chrome object`,
+  no polyfill "locked down" errors in its console);
+- popup preferred-size behaving (open uBlock's popup, confirm it hugs its content and anchors under the toolbar icon);
+- no SIGTRAP app-wide crashes (Electron 43/44 landmine: MV3 service workers re-woken via
+  `startWorkerForScope` can NOTREACHED-abort the whole browser process — electron issue #52644).
+
+Diagnosis recipe that cracked it: launch installed app with `DEBUG='electron-chrome-extensions:*'`,
+click each extension icon, then grep the log for `updatePreferredSize` / `updatePosition` (popup geometry,
+from the library's PopupView) alongside renderer `Uncaught TypeError` lines (from the extension's own JS).
+Popup geometry values were the red herring; the extension-side TypeErrors were the real signal.
+
 ## Debugging Tips
 
 ### Useful Log Locations

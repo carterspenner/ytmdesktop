@@ -3858,9 +3858,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^44.3.0":
-  version: 44.3.0
-  resolution: "electron@npm:44.3.0"
+"electron@npm:^42.7.0":
+  version: 42.11.3
+  resolution: "electron@npm:42.11.3"
   dependencies:
     "@electron-internal/extract-zip": "npm:^1.0.1"
     "@electron/get": "npm:^5.0.0"
@@ -3868,7 +3868,7 @@ __metadata:
   bin:
     electron: cli.js
     install-electron: install.js
-  checksum: 10c0/de84b047e0227802628107a4b23be2a53df8b3a50ba9db139684ef2be2246f4dfb4c7a672a6e910581906761648b03cb47718f8c8f7bf6cb87ce4324c821617a
+  checksum: 10c0/42ec2174199864f193e0bf74f7a35e040f51e2749482c6e1a6d0277deff19c423175063496938dcb8ab3e00b4e084105a4788dcb40ff863169c3b6f1f319404d
   languageName: node
   linkType: hard
 
@@ -10039,7 +10039,7 @@ __metadata:
     "@typescript-eslint/parser": "npm:^8.55.0"
     "@vitejs/plugin-vue": "npm:^5.2.4"
     conf: "npm:^10.2.0"
-    electron: "npm:^44.3.0"
+    electron: "npm:^42.7.0"
     electron-chrome-extensions: "npm:4.9.0"
     electron-log: "npm:5.4.3"
     electron-squirrel-startup: "npm:^1.0.1"
